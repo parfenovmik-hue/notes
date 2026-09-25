@@ -366,3 +366,149 @@ svg.i, .i svg { fill: none; stroke: currentColor; stroke-width: 1.9; stroke-line
 .info-card { padding: 12px 14px; font-size: 14px; color: var(--muted); display: flex; gap: 10px; align-items: flex-start; margin-bottom: 12px; }
 .info-card b { color: var(--text); }
 .info-card button { margin-left: auto; color: var(--muted); font-size: 18px; line-height: 1; }
+
+/* ================= v0.2 ================= */
+
+/* ---------- Сетка папок ---------- */
+
+.fgrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 6px; }
+.slot { min-height: 112px; border-radius: 20px; display: grid; place-items: start center; padding-top: 4px; transition: background .15s; }
+.arranging .slot.empty { border: 1.5px dashed var(--faint); place-items: center; cursor: pointer; }
+.slot-plus { font-size: 26px; color: var(--faint); font-weight: 300; }
+.slot.over { background: var(--accent-soft); }
+.tile {
+  position: relative; width: 100%; display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 6px 2px;
+  -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; touch-action: manipulation;
+}
+.arranging .tile { touch-action: none; }
+.t-ico {
+  width: 66px; height: 66px; border-radius: 19px; display: grid; place-items: center; overflow: hidden; flex: none;
+  color: var(--fc); background: color-mix(in srgb, var(--fc) 15%, var(--card)); box-shadow: var(--shadow);
+}
+.t-ico svg { width: 30px; height: 30px; }
+.t-ico.img { background: var(--card); }
+.t-ico img, .f-ico img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+.t-name { font-size: 13px; font-weight: 500; text-align: center; line-height: 1.2; max-width: 100%; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.t-badge {
+  position: absolute; top: 0; left: calc(50% + 22px); min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px;
+  background: var(--danger); color: #fff; font-size: 12px; font-style: normal; font-weight: 600; line-height: 20px; text-align: center;
+}
+.arranging .tile .t-ico { animation: jiggle .28s ease-in-out infinite alternate; }
+.arranging .slot:nth-child(2n) .tile .t-ico { animation-delay: -.14s; }
+@keyframes jiggle { from { transform: rotate(-2.2deg); } to { transform: rotate(2.2deg); } }
+.tile.dragging { opacity: .25; }
+.drag-ghost { position: fixed; z-index: 80; pointer-events: none; transform: translate(-50%, -50%) scale(1.1); }
+.drag-ghost .t-ico { animation: none !important; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+
+.f-ico.img { background: var(--card); }
+.sub-count { font-size: 13px; color: var(--muted); margin: -6px 4px 10px; }
+.img-row { display: flex; align-items: center; gap: 10px; }
+.img-row .t-ico { width: 56px; height: 56px; border-radius: 16px; }
+.img-row .btn { width: auto; flex: 1; }
+.chip img, .tag img { width: 16px; height: 16px; border-radius: 4px; object-fit: cover; }
+.tag img { width: 14px; height: 14px; }
+
+/* ---------- Список тем ---------- */
+
+.note-row { display: flex; align-items: center; gap: 10px; }
+.n-main { flex: 1; min-width: 0; }
+.n-side { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex: none; }
+.n-stat { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.n-stat svg { width: 13px; height: 13px; }
+.n-stat.ok { color: var(--ok); }
+
+/* ---------- Неделя со свайпом ---------- */
+
+.week-clip { flex: 1; overflow: hidden; margin: 0 -2px; padding: 0 2px; }
+.week { touch-action: pan-y; }
+.week.in-next { animation: in-next .2s ease-out; }
+.week.in-prev { animation: in-prev .2s ease-out; }
+@keyframes in-next { from { transform: translateX(45%); opacity: 0; } }
+@keyframes in-prev { from { transform: translateX(-45%); opacity: 0; } }
+
+/* ---------- Редактор темы ---------- */
+
+.sheet.editor .sheet-head button:first-child { display: inline-flex; align-items: center; gap: 0; min-width: 0; max-width: 60%; margin-left: -6px; }
+.sheet.editor .sheet-head button:first-child svg { width: 24px; height: 24px; flex: none; }
+.back-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sheet-head button svg { width: 24px; height: 24px; }
+.note-tools {
+  display: flex; gap: 6px; padding: 2px 12px 8px; border-bottom: 1px solid var(--line);
+}
+.note-tools button {
+  display: inline-flex; align-items: center; gap: 6px; padding: 7px 11px; border-radius: 10px;
+  background: var(--card-2); color: var(--text); font-size: 14px; font-weight: 500;
+}
+.note-tools button svg { width: 18px; height: 18px; color: var(--accent); }
+.note-tools .kbd { margin-left: auto; padding: 7px 9px; }
+.note-tools .kbd svg { color: var(--muted); }
+.sheet.editor .sheet-body { padding-top: 10px; }
+.blocks { padding-bottom: 30px; min-height: 45dvh; }
+.b-text {
+  display: block; width: 100%; border: 0; outline: 0; background: none; resize: none; overflow: hidden;
+  font-size: 17px; line-height: 1.5; padding: 3px 0;
+}
+.b-text::placeholder { color: var(--faint); }
+.b-task { display: flex; align-items: flex-start; gap: 10px; padding: 5px 0; }
+.b-task .check { width: 22px; height: 22px; border-radius: 50%; margin-top: 2px; }
+.b-task .check svg { width: 14px; height: 14px; }
+.b-task.done .check { background: var(--accent); border-color: var(--accent); }
+.b-task.done .check svg { opacity: 1; }
+.b-ttl { flex: 1; min-width: 0; border: 0; outline: 0; background: none; resize: none; overflow: hidden; font-size: 17px; line-height: 1.5; padding: 0; }
+.b-task.done .b-ttl { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--faint); }
+.b-date {
+  flex: none; margin-top: 1px; height: 24px; padding: 0 6px; border-radius: 7px; font-size: 12.5px; color: var(--faint);
+  display: inline-flex; align-items: center;
+}
+.b-date svg { width: 17px; height: 17px; }
+.b-date.set { color: var(--accent); background: var(--accent-soft); font-weight: 500; }
+.b-date.late { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.b-file { position: relative; margin: 8px 0; }
+.f-open {
+  display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+  padding: 10px 44px 10px 12px; border-radius: 14px; background: var(--card-2);
+}
+.b-file.is-img .f-open { padding: 0; background: none; display: block; }
+.f-thumb { display: block; border-radius: 14px; overflow: hidden; background: var(--card-2); min-height: 120px; }
+.f-thumb img { display: block; width: 100%; max-height: 420px; object-fit: cover; }
+.f-wait { display: block; padding: 40px 16px; text-align: center; font-size: 13px; color: var(--muted); }
+.f-icon { width: 40px; height: 40px; border-radius: 10px; background: var(--card); display: grid; place-items: center; color: var(--accent); flex: none; }
+.f-icon svg { width: 22px; height: 22px; }
+.f-meta { min-width: 0; display: flex; flex-direction: column; }
+.f-meta b { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.f-meta small { color: var(--muted); font-size: 12.5px; }
+.f-del {
+  position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; border-radius: 50%;
+  background: rgba(0,0,0,.45); color: #fff; display: grid; place-items: center;
+}
+.f-del svg { width: 14px; height: 14px; stroke-width: 2.4; }
+.b-file:not(.is-img) .f-del { top: 50%; transform: translateY(-50%); background: none; color: var(--muted); }
+
+.viewer {
+  position: fixed; inset: 0; z-index: 90; background: #000; display: flex; align-items: center; justify-content: center;
+  opacity: 0; transition: opacity .2s;
+}
+.viewer.show { opacity: 1; }
+.viewer img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.viewer-bar {
+  position: absolute; left: 0; right: 0; bottom: 0; display: flex; justify-content: space-between;
+  padding: 14px 20px calc(env(safe-area-inset-bottom) + 14px); background: linear-gradient(transparent, rgba(0,0,0,.6));
+}
+.viewer-bar button { color: #fff; font-size: 16px; font-weight: 500; }
+
+/* ---------- Напоминания и настройки ---------- */
+
+.remind-row {
+  display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 12px;
+  background: var(--card); box-shadow: var(--shadow); margin-bottom: 12px; font-size: 15px;
+}
+.remind-row svg { width: 18px; height: 18px; color: var(--accent); flex: none; }
+.remind-row input { border: 0; outline: 0; background: var(--card-2); border-radius: 8px; padding: 5px 8px; font-size: 15px; min-width: 84px; }
+.remind-row button { margin-left: auto; color: var(--muted); font-size: 13px; }
+.set-row { display: flex; align-items: center; gap: 10px; padding: 12px 0 0; font-size: 15px; }
+.set-row span { flex: 1; }
+.set-row input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); margin: 0; }
+.set-row input[type=time] { border: 0; outline: 0; background: var(--card-2); border-radius: 8px; padding: 5px 8px; font-size: 15px; }
+.push-ok { display: flex; align-items: center; gap: 8px; color: var(--ok); font-weight: 500; font-size: 15px; }
+.push-ok svg { width: 18px; height: 18px; }
+.push-ok button { margin-left: auto; color: var(--accent); font-weight: 500; }
