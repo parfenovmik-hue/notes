@@ -22,11 +22,11 @@ const SHEETS = {
   notes: {
     name: 'Темы',
     cols: [['folderName', 'Папка'], ['title', 'Тема'], ['text', 'Содержимое'],
-      ['id', 'id'], ['folder', 'folder'], ['blocks', 'blocks'], ['pinned', 'pinned'], ['createdAt', 'createdAt'], ['updatedAt', 'updatedAt'], ['deleted', 'deleted']],
+      ['id', 'id'], ['folder', 'folder'], ['html', 'html'], ['blocks', 'blocks'], ['pinned', 'pinned'], ['order', 'order'], ['createdAt', 'createdAt'], ['updatedAt', 'updatedAt'], ['deleted', 'deleted']],
   },
   tasks: {
     name: 'Дела',
-    cols: [['date', 'Дата'], ['title', 'Дело'], ['folderName', 'Папка'], ['noteTitle', 'Тема'], ['done', 'Сделано'], ['remind', 'Напомнить'], ['note', 'Заметка'],
+    cols: [['date', 'Дата'], ['title', 'Дело'], ['folderName', 'Папка'], ['noteTitle', 'Тема'], ['done', 'Сделано'], ['remind', 'Напомнить'], ['note', 'Заметка'], ['pinned', 'Закреплено'],
       ['id', 'id'], ['folder', 'folder'], ['noteId', 'noteId'], ['order', 'order'], ['doneAt', 'doneAt'], ['createdAt', 'createdAt'], ['updatedAt', 'updatedAt'], ['deleted', 'deleted']],
   },
   files: {
@@ -35,8 +35,8 @@ const SHEETS = {
       ['id', 'id'], ['noteId', 'noteId'], ['driveId', 'driveId'], ['createdAt', 'createdAt'], ['updatedAt', 'updatedAt'], ['deleted', 'deleted']],
   },
 };
-const TECH = ['id', 'folder', 'noteId', 'blocks', 'pinned', 'order', 'doneAt', 'createdAt', 'updatedAt', 'deleted', 'driveId'];
-const TEXT_KEYS = ['id', 'name', 'icon', 'color', 'image', 'title', 'text', 'folder', 'folderName', 'noteId', 'noteTitle', 'note', 'blocks', 'remind', 'mime', 'driveId'];
+const TECH = ['id', 'folder', 'noteId', 'html', 'blocks', 'pinned', 'order', 'doneAt', 'createdAt', 'updatedAt', 'deleted', 'driveId'];
+const TEXT_KEYS = ['id', 'name', 'icon', 'color', 'image', 'title', 'text', 'folder', 'folderName', 'noteId', 'noteTitle', 'note', 'html', 'blocks', 'remind', 'mime', 'driveId'];
 const PROPS = PropertiesService.getScriptProperties();
 const FILES_FOLDER = 'Заметки — вложения';
 

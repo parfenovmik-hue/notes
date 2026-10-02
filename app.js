@@ -1,13 +1,13 @@
 'use strict';
 
 /* =========================================================
-   Заметки — PWA: ежедневник, папки с темами (текст, чек-листы, файлы),
-   календарь и напоминания.
+   Заметки — PWA: ежедневник, папки с темами (форматированный текст,
+   чек-листы, файлы), календарь, поиск и напоминания.
    Данные: IndexedDB на телефоне + синхронизация с Google Sheets
    через Apps Script (см. google-apps-script/Code.gs). Файлы — в Google Диске.
    ========================================================= */
 
-const APP_VERSION = '0.2.0';
+const APP_VERSION = '0.3.0';
 
 /* ---------------- Утилиты ---------------- */
 
@@ -82,6 +82,7 @@ function b64ToBuf(b64) { return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0
 const P = {
   chevL: '<path d="m15 18-6-6 6-6"/>',
   chevR: '<path d="m9 18 6-6-6-6"/>',
+  chevD: '<path d="m6 9 6 6 6-6"/>',
   check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   move: '<path d="M4 12h15M13 6l6 6-6 6"/>',
@@ -98,6 +99,15 @@ const P = {
   x: '<path d="M6 6l12 12M18 6 6 18"/>',
   file: '<path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5"/>',
   kbd: '<rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6 10h.01M9.5 10h.01M13 10h.01M16.5 10h.01M8 14h8"/>',
+  pin: '<path d="M9 3.5h6l-1 5.5 3.5 3.5V15h-11v-2.5L10 9z"/><path d="M12 15v6"/>',
+  trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/>',
+  ul: '<circle cx="5" cy="7" r="1.1"/><circle cx="5" cy="12" r="1.1"/><circle cx="5" cy="17" r="1.1"/><path d="M9.5 7H20M9.5 12H20M9.5 17H20"/>',
+  dash: '<path d="M3.5 7h3M3.5 12h3M3.5 17h3M9.5 7H20M9.5 12H20M9.5 17H20"/>',
+  ol: '<path d="M4 5.5h1.3v4M3.8 9.5h3M3.8 14.3c.2-1.2 2.6-1.2 2.6.2 0 1-2.6 1.7-2.6 3h2.8M9.5 7H20M9.5 12H20M9.5 17H20"/>',
+  outdent: '<path d="M3.5 5.5h17M11 10h9.5M11 14h9.5M3.5 18.5h17M7 9.5 4 12l3 2.5"/>',
+  indent: '<path d="M3.5 5.5h17M11 10h9.5M11 14h9.5M3.5 18.5h17M4 9.5 7 12l-3 2.5"/>',
+  quote: '<path d="M5 5v14"/><path d="M9.5 8H20M9.5 12H20M9.5 16h7"/>',
 };
 const FOLDER_ICONS = {
   folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
@@ -172,9 +182,10 @@ const Store = {
 const KINDS = ['folders', 'notes', 'tasks', 'files'];
 let state;
 const ui = {
-  tab: 'today', day: ymd(), lastToday: ymd(), weekAnim: 0,
+  tab: 'today', folder: '', hist: [],
+  day: ymd(), lastToday: ymd(), weekAnim: 0,
   calMonth: ymd().slice(0, 7), calDay: ymd(),
-  folder: '', arrange: false,
+  arrange: false, qAll: '', qFolder: '',
   sync: { status: 'idle', msg: '' }, sheets: [], refocus: '', swallowClick: 0,
 };
 
@@ -194,7 +205,7 @@ function defaultState() {
     ['Мой Telegram', 'send', 'teal'],
     ['Дом, семья', 'home', 'orange'],
   ].map(([name, ic, color], i) => ({ id: uid('f'), name, icon: ic, color, image: FOLDER_IMAGES[name] || '', order: i, updatedAt: now, deleted: false, _dirty: true }));
-  return { v: 2, folders, notes: [], tasks: [], files: [], settings: defaultSettings() };
+  return { v: 3, folders, notes: [], tasks: [], files: [], settings: defaultSettings() };
 }
 
 function save() { Store.set('state', state); }
@@ -217,82 +228,175 @@ function patch(k, id, changes) {
   const e = byId(k, id);
   if (e) upsert(k, { ...e, ...changes });
 }
+// Новый порядок элементов: переиспользуем их же значения order, чтобы не задеть остальных
+function reorder(kind, ids) {
+  let orders = ids.map((id) => byId(kind, id)?.order || 0).sort((a, b) => a - b);
+  if (new Set(orders).size < orders.length) orders = ids.map((_, i) => orders[0] + i);
+  ids.forEach((id, i) => { if (byId(kind, id)?.order !== orders[i]) patch(kind, id, { order: orders[i] }); });
+}
 
 function newTask(o) {
   const now = Date.now();
-  const t = { id: uid('t'), title: '', noteId: '', folder: '', date: '', remind: '', note: '', done: false, doneAt: 0, order: now, createdAt: now, deleted: false, ...o };
+  const t = { id: uid('t'), title: '', noteId: '', folder: '', date: '', remind: '', note: '', done: false, doneAt: 0, pinned: false, order: now, createdAt: now, deleted: false, ...o };
   upsert('tasks', t);
   return t;
 }
+function topOrder(folder) {
+  const os = live('notes').filter((n) => n.folder === folder).map((n) => n.order || 0);
+  return os.length ? Math.min(...os) - 1 : 0;
+}
 function newNote(o) {
   const now = Date.now();
-  return { id: uid('n'), folder: '', title: '', blocks: [{ t: 'text', text: '' }], pinned: false, createdAt: now, deleted: false, ...o };
+  return { id: uid('n'), folder: '', title: '', html: '', pinned: false, order: topOrder(o?.folder || ''), createdAt: now, deleted: false, ...o };
 }
 
-/* ---------------- Темы: блоки текста, дел и файлов ----------------
-   note.blocks = [{t:'text', text}, {t:'task', id}, {t:'file', id}]
-   Дела из тем — обычные задачи (state.tasks) с noteId, поэтому попадают в ежедневник. */
+/* ---------------- Темы: HTML с форматированием ----------------
+   В теме хранится HTML. Пункты чек-листа — <div class="ck" data-task="id">,
+   за каждым стоит обычное дело (state.tasks), поэтому оно попадает в ежедневник.
+   Файлы — <figure class="att" data-file="id">. */
 
-// Склеивает соседние тексты, убирает пустые и удалённое, оставляет текст в конце.
-// focus = {block, pos} — блок, который нельзя выкидывать, и позиция курсора в нём.
-function normalize(bl, focus) {
-  const out = [];
-  for (const b of bl) {
-    if (b.t === 'task' && !liveById('tasks', b.id)) continue;
-    if (b.t === 'file' && !liveById('files', b.id)) continue;
-    const prev = out[out.length - 1];
-    if (b.t === 'text' && prev?.t === 'text') {
-      const sep = prev.text && b.text ? '\n' : '';
-      if (focus?.block === b) { focus.block = prev; focus.pos = focus.pos === 'end' ? 'end' : prev.text.length + sep.length + focus.pos; }
-      prev.text += sep + b.text;
-      continue;
+const ALLOWED = new Set(['DIV', 'P', 'BR', 'B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'H1', 'H2', 'H3', 'PRE', 'BLOCKQUOTE', 'UL', 'OL', 'LI', 'SPAN', 'FIGURE', 'CODE']);
+const ID_RE = /^[a-z]_[a-z0-9]+$/;
+const CSS_VAL = /^(#[0-9a-f]{3,8}|rgba?\([\d\s.,%]+\)|transparent|bold|normal|italic|[0-9]{3}|underline|line-through|none)$/i;
+
+function sanitize(html) {
+  const tpl = document.createElement('template');
+  tpl.innerHTML = html || '';
+  const clean = (node) => {
+    for (const c of [...node.childNodes]) {
+      if (c.nodeType === 3) continue;
+      if (c.nodeType !== 1) { c.remove(); continue; }
+      let el = c;
+      if (el.tagName === 'FONT') {
+        const s = document.createElement('span');
+        if (el.getAttribute('color')) s.style.color = el.getAttribute('color');
+        s.append(...el.childNodes);
+        el.replaceWith(s);
+        el = s;
+      }
+      if (/^(SCRIPT|STYLE|IFRAME|OBJECT|EMBED|LINK|META|IMG|SVG|VIDEO|AUDIO|INPUT|BUTTON|TEXTAREA|SELECT)$/.test(el.tagName)) {
+        if (el.tagName !== 'BUTTON') { el.remove(); continue; }
+      }
+      if (!ALLOWED.has(el.tagName)) { clean(el); el.replaceWith(...el.childNodes); continue; }
+      const keep = {};
+      if (el.tagName === 'DIV' && el.classList.contains('ck')) {
+        keep.class = 'ck';
+        if (ID_RE.test(el.dataset.task || '')) keep['data-task'] = el.dataset.task;
+      }
+      if (el.tagName === 'UL' && el.classList.contains('dash')) keep.class = 'dash';
+      if (el.tagName === 'FIGURE') {
+        keep.class = 'att';
+        keep.contenteditable = 'false';
+        if (ID_RE.test(el.dataset.file || '')) keep['data-file'] = el.dataset.file;
+        if (/^[sm]$/.test(el.dataset.size || '')) keep['data-size'] = el.dataset.size;
+      }
+      if (/^[1-4]$/.test(el.getAttribute('data-ind') || '')) keep['data-ind'] = el.getAttribute('data-ind');
+      const style = [];
+      if (/^(SPAN|B|STRONG|I|EM|U|S|STRIKE|CODE)$/.test(el.tagName)) {
+        for (const prop of ['background-color', 'color', 'font-weight', 'font-style', 'text-decoration-line']) {
+          const v = el.style.getPropertyValue(prop).trim();
+          if (v && CSS_VAL.test(v)) style.push(`${prop}: ${v}`);
+        }
+      }
+      for (const a of [...el.attributes]) el.removeAttribute(a.name);
+      for (const [k, v] of Object.entries(keep)) el.setAttribute(k, v);
+      if (style.length) el.setAttribute('style', style.join('; '));
+      if (el.tagName === 'FIGURE') { el.innerHTML = ''; if (!el.dataset.file) el.remove(); continue; }
+      if (el.tagName === 'SPAN' && !style.length) { clean(el); el.replaceWith(...el.childNodes); continue; }
+      clean(el);
     }
-    out.push(b);
-  }
-  const res = out.filter((b, i) => b.t !== 'text' || b.text || i === out.length - 1 || focus?.block === b);
-  if (!res.length || res[res.length - 1].t !== 'text') res.push({ t: 'text', text: '' });
-  return res;
+  };
+  clean(tpl.content);
+  return tpl.innerHTML;
 }
-const copyBlocks = (bl) => (bl || []).map((b) => ({ ...b }));
+
+function parseHtml(html) {
+  const tpl = document.createElement('template');
+  tpl.innerHTML = html || '';
+  return tpl.content;
+}
+function editHtml(n, fn) {
+  const root = parseHtml(n.html);
+  fn(root);
+  const div = document.createElement('div');
+  div.append(root);
+  upsert('notes', { ...n, html: div.innerHTML });
+}
+
+// Строки темы: [{text}, {task, text}, {file}] — для заголовка, превью, поиска и таблицы
+const linesCache = new Map();
+function noteLines(n) {
+  const key = n.id + ':' + n.updatedAt;
+  if (linesCache.has(key)) return linesCache.get(key);
+  const lines = htmlLines(n.html);
+  linesCache.set(key, lines);
+  return lines;
+}
+function htmlLines(html) {
+  const lines = [];
+  let buf = '';
+  const flush = () => { const t = buf.replace(/[\s​]+/g, ' ').trim(); if (t) lines.push({ text: t }); buf = ''; };
+  const walk = (node) => {
+    for (const c of node.childNodes) {
+      if (c.nodeType === 3) { buf += c.textContent; continue; }
+      if (c.nodeType !== 1) continue;
+      if (c.tagName === 'BR') { flush(); continue; }
+      if (c.tagName === 'FIGURE') { flush(); if (c.dataset.file) lines.push({ file: c.dataset.file }); continue; }
+      if (c.classList.contains('ck')) { flush(); lines.push({ task: c.dataset.task || '', text: c.textContent.replace(/[\s​]+/g, ' ').trim() }); continue; }
+      const block = /^(DIV|P|H1|H2|H3|PRE|BLOCKQUOTE|LI|UL|OL)$/.test(c.tagName);
+      if (block) flush();
+      if (c.tagName === 'LI') buf += c.parentElement?.tagName === 'OL' ? '' : '• ';
+      walk(c);
+      if (block) flush();
+    }
+  };
+  walk(parseHtml(html));
+  flush();
+  return lines;
+}
+function blocksToHtml(blocks, title) {
+  let h = title ? `<h1>${esc(title)}</h1>` : '';
+  for (const b of blocks || []) {
+    if (b.t === 'text') h += (b.text || '').split('\n').map((l) => `<div>${esc(l) || '<br>'}</div>`).join('');
+    else if (b.t === 'task') h += `<div class="ck" data-task="${esc(b.id)}">${esc(liveById('tasks', b.id)?.title || '')}</div>`;
+    else if (b.t === 'file') h += `<figure class="att" contenteditable="false" data-file="${esc(b.id)}"></figure>`;
+  }
+  return h;
+}
 
 function noteTasks(n) { return live('tasks').filter((t) => t.noteId === n.id); }
 function noteTitle(n) {
-  if (n.title.trim()) return n.title.trim();
-  for (const b of n.blocks) {
-    if (b.t === 'text' && b.text.trim()) return b.text.trim().split('\n')[0].slice(0, 80);
-    if (b.t === 'task') { const t = liveById('tasks', b.id); if (t?.title.trim()) return t.title.trim(); }
-  }
-  return 'Новая тема';
+  if (n.title?.trim()) return n.title.trim();
+  const l = noteLines(n).find((x) => x.text);
+  return l ? l.text.slice(0, 80) : 'Новая тема';
 }
 function noteText(n) {
-  return n.blocks.map((b) => {
-    if (b.t === 'text') return b.text;
-    if (b.t === 'task') { const t = liveById('tasks', b.id); return t ? (t.done ? '☑ ' : '☐ ') + t.title : ''; }
-    const f = liveById('files', b.id);
-    return f ? '📎 ' + f.name : '';
+  return noteLines(n).map((l) => {
+    if (l.file) { const f = liveById('files', l.file); return f ? '📎 ' + f.name : ''; }
+    if (l.task !== undefined) return (liveById('tasks', l.task)?.done ? '☑ ' : '☐ ') + l.text;
+    return l.text;
   }).filter(Boolean).join('\n');
 }
 function notePreview(n) {
-  const lines = noteText(n).split('\n').map((l) => l.trim()).filter(Boolean);
-  if (!n.title.trim()) lines.shift();
+  const lines = noteText(n).split('\n').filter(Boolean);
+  const title = noteTitle(n);
+  if (lines[0] === title) lines.shift();
   return lines.join(' · ').slice(0, 160);
 }
 function noteStats(n) {
   const ts = noteTasks(n);
-  return { open: ts.filter((t) => !t.done).length, total: ts.length, files: n.blocks.filter((b) => b.t === 'file' && liveById('files', b.id)).length };
+  return { open: ts.filter((t) => !t.done).length, total: ts.length, files: noteLines(n).filter((l) => l.file && liveById('files', l.file)).length };
 }
 
 // Тема «Дела» в папке — сюда попадают дела, добавленные в папку без темы
 function defaultTopic(folderId) {
   let n = live('notes').find((x) => x.folder === folderId && x.title === 'Дела');
-  if (!n) { n = newNote({ folder: folderId, title: 'Дела' }); upsert('notes', n); }
+  if (!n) { n = newNote({ folder: folderId, title: 'Дела', html: '<h1>Дела</h1>' }); upsert('notes', n); }
   return n;
 }
 function detachTask(t) {
   const n = t.noteId && byId('notes', t.noteId);
-  if (!n) return;
-  const blocks = n.blocks.filter((b) => !(b.t === 'task' && b.id === t.id));
-  if (blocks.length !== n.blocks.length) upsert('notes', { ...n, blocks: normalize(copyBlocks(blocks)) });
+  if (n && n.html.includes(t.id)) editHtml(n, (root) => root.querySelectorAll(`[data-task="${t.id}"]`).forEach((el) => el.remove()));
 }
 function attachTask(id, folderId, noteId) {
   const t = byId('tasks', id);
@@ -300,17 +404,25 @@ function attachTask(id, folderId, noteId) {
   detachTask(t);
   if (!folderId && !noteId) { patch('tasks', id, { noteId: '', folder: '' }); return; }
   const n = (noteId && liveById('notes', noteId)) || defaultTopic(folderId);
-  const blocks = copyBlocks(n.blocks);
-  const last = blocks[blocks.length - 1];
-  blocks.splice(last?.t === 'text' && !last.text ? blocks.length - 1 : blocks.length, 0, { t: 'task', id });
   patch('tasks', id, { noteId: n.id, folder: n.folder });
-  upsert('notes', { ...n, blocks: normalize(blocks) });
+  editHtml(liveById('notes', n.id), (root) => {
+    const d = document.createElement('div');
+    d.className = 'ck';
+    d.dataset.task = id;
+    d.textContent = t.title;
+    root.append(d);
+  });
+}
+function setTaskTitleInNote(t) {
+  const n = liveById('notes', t.noteId);
+  if (n && n.html.includes(t.id)) editHtml(n, (root) => { const el = root.querySelector(`[data-task="${t.id}"]`); if (el) el.textContent = t.title; });
 }
 
 /* ---------------- Выборки ---------------- */
 
-const sortOpen = (a, b) => (a.date || '9999').localeCompare(b.date || '9999') || (a.order || 0) - (b.order || 0);
+const sortOpen = (a, b) => (b.pinned - a.pinned) || (a.date || '9999').localeCompare(b.date || '9999') || (a.order || 0) - (b.order || 0);
 const sortDone = (a, b) => (b.doneAt || 0) - (a.doneAt || 0);
+const sortNotes = (a, b) => (b.pinned - a.pinned) || (a.order || 0) - (b.order || 0);
 
 function tasksOn(day) {
   const list = live('tasks').filter((t) => t.date === day);
@@ -318,7 +430,7 @@ function tasksOn(day) {
 }
 function lateTasks() {
   const t = ymd();
-  return live('tasks').filter((x) => !x.done && x.date && x.date < t).sort(sortOpen);
+  return live('tasks').filter((x) => !x.done && x.date && x.date < t).sort((a, b) => a.date.localeCompare(b.date) || a.order - b.order);
 }
 // Для точек в календаре: { 'YYYY-MM-DD': { open, done } }
 function dayStats() {
@@ -330,7 +442,7 @@ function dayStats() {
   }
   return m;
 }
-const inboxNotes = () => live('notes').filter((n) => !liveFolder(n.folder)).sort((a, b) => b.updatedAt - a.updatedAt);
+const inboxNotes = () => live('notes').filter((n) => !liveFolder(n.folder)).sort(sortNotes);
 const inboxTasks = () => live('tasks').filter((t) => !t.done && !t.date && !t.noteId && !liveFolder(t.folder)).sort(sortOpen);
 const inboxCount = () => inboxNotes().length + inboxTasks().length;
 
@@ -340,12 +452,36 @@ function when(ts) {
   return dateShort(s);
 }
 
+/* ---------------- Поиск ---------------- */
+
+const normQ = (s) => String(s || '').toLowerCase().replace(/ё/g, 'е');
+const qWords = (q) => normQ(q).split(/\s+/).filter(Boolean);
+const matches = (hay, words) => { const h = normQ(hay); return words.every((w) => h.includes(w)); };
+// Подсветка найденных слов (normQ не меняет длину строки, индексы совпадают)
+function hl(text, words) {
+  const t = String(text || ''), n = normQ(t);
+  const marks = [];
+  for (const w of words) { let i = n.indexOf(w); while (i >= 0) { marks.push([i, i + w.length]); i = n.indexOf(w, i + w.length); } }
+  if (!marks.length) return esc(t);
+  marks.sort((a, b) => a[0] - b[0]);
+  let out = '', pos = 0;
+  for (const [s, e] of marks) { if (s < pos) continue; out += esc(t.slice(pos, s)) + '<mark>' + esc(t.slice(s, e)) + '</mark>'; pos = e; }
+  return out + esc(t.slice(pos));
+}
+function snippet(text, words) {
+  const t = text.replace(/\n/g, ' · ');
+  const n = normQ(t);
+  const i = Math.min(...words.map((w) => n.indexOf(w)).filter((x) => x >= 0), Infinity);
+  if (!isFinite(i) || i < 40) return t.slice(0, 140);
+  return '…' + t.slice(i - 30, i + 110);
+}
+
 /* ---------------- Синхронизация с Google Таблицей ---------------- */
 
 const FIELDS = {
   folders: { s: ['id', 'name', 'icon', 'color', 'image'], n: ['order', 'updatedAt'], b: ['deleted'] },
-  notes: { s: ['id', 'folder', 'title'], n: ['createdAt', 'updatedAt'], b: ['pinned', 'deleted'] },
-  tasks: { s: ['id', 'title', 'noteId', 'folder', 'date', 'remind', 'note'], n: ['order', 'doneAt', 'createdAt', 'updatedAt'], b: ['done', 'deleted'] },
+  notes: { s: ['id', 'folder', 'title', 'html'], n: ['order', 'createdAt', 'updatedAt'], b: ['pinned', 'deleted'] },
+  tasks: { s: ['id', 'title', 'noteId', 'folder', 'date', 'remind', 'note'], n: ['order', 'doneAt', 'createdAt', 'updatedAt'], b: ['done', 'pinned', 'deleted'] },
   files: { s: ['id', 'noteId', 'name', 'mime', 'driveId'], n: ['size', 'createdAt', 'updatedAt'], b: ['deleted'] },
 };
 
@@ -354,17 +490,18 @@ function norm(k, r) {
   f.s.forEach((x) => (o[x] = r[x] == null ? '' : String(r[x])));
   f.n.forEach((x) => { const n = Number(r[x]); o[x] = isFinite(n) ? n : 0; });
   f.b.forEach((x) => (o[x] = r[x] === true || String(r[x]).toUpperCase() === 'TRUE'));
-  if (k === 'notes') {
+  if (k === 'notes' && !o.html) {
+    // Темы из прошлых версий: блоки или простой текст
     let bl = r.blocks;
     if (typeof bl === 'string') { try { bl = JSON.parse(bl); } catch (e) { bl = null; } }
-    o.blocks = Array.isArray(bl) && bl.length ? bl : [{ t: 'text', text: String(r.body ?? r.text ?? '') }];
+    o.html = Array.isArray(bl) ? blocksToHtml(bl, o.title) : blocksToHtml([{ t: 'text', text: String(r.body ?? r.text ?? '') }], o.title);
   }
   return o;
 }
 // Строка для таблицы: технические поля + читаемые названия
 function outRow(k, e) {
   const o = norm(k, e);
-  if (k === 'notes') { o.blocks = JSON.stringify(e.blocks); o.text = noteText(e); }
+  if (k === 'notes') o.text = noteText(e);
   if (k === 'notes' || k === 'tasks') o.folderName = liveFolder(e.folder)?.name || 'Входящие';
   if (k === 'tasks' || k === 'files') { const n = byId('notes', e.noteId); o.noteTitle = n ? noteTitle(n) : ''; }
   return o;
@@ -547,6 +684,13 @@ function openViewer(id) {
   document.body.append(v);
   requestAnimationFrame(() => v.classList.add('show'));
 }
+function closeViewer() {
+  const v = $('.viewer');
+  if (!v) return false;
+  v.classList.remove('show');
+  setTimeout(() => v.remove(), 200);
+  return true;
+}
 function shareFile(file, url) {
   if (navigator.canShare?.({ files: [file] })) { navigator.share({ files: [file] }).catch(() => {}); return; }
   const a = document.createElement('a');
@@ -606,6 +750,52 @@ function toast(msg, undo) {
 
 function autoGrow(el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; }
 
+/* ---------------- Навигация ---------------- */
+
+function nav(tab, folder = '') {
+  if (ui.tab !== tab || ui.folder !== folder) {
+    ui.hist.push({ tab: ui.tab, folder: ui.folder });
+    if (ui.hist.length > 40) ui.hist.shift();
+  }
+  ui.tab = tab;
+  ui.folder = folder;
+  ui.arrange = false;
+  if (!folder) ui.qFolder = '';
+  render();
+  window.scrollTo(0, 0);
+}
+// Свайп от левого края: закрыть окно → выйти из режима → предыдущий экран
+function goBack() {
+  if (closeViewer()) return;
+  if (ui.sheets.length) { closeSheet(); return; }
+  if (ui.arrange) { ui.arrange = false; render(); return; }
+  // Из папки — к списку папок, как кнопка «‹ Папки»
+  if (ui.tab === 'folders' && ui.folder) {
+    const top = ui.hist[ui.hist.length - 1];
+    if (top && top.tab === 'folders' && !top.folder) ui.hist.pop();
+    ui.folder = '';
+    ui.qFolder = '';
+    render();
+    window.scrollTo(0, 0);
+    return;
+  }
+  const h = ui.hist.pop();
+  if (h) {
+    ui.tab = h.tab;
+    ui.folder = liveFolder(h.folder) ? h.folder : '';
+    ui.qFolder = '';
+    render();
+    window.scrollTo(0, 0);
+  }
+}
+// Свайп сверху вниз: в «Сегодня» откуда угодно
+function goToday() {
+  closeViewer();
+  while (ui.sheets.length) closeSheet();
+  ui.day = ymd();
+  nav('today');
+}
+
 /* ---------------- Строки списков ---------------- */
 
 function taskTag(t) {
@@ -613,24 +803,27 @@ function taskTag(t) {
   const n = liveById('notes', t.noteId);
   const topic = n && n.title !== 'Дела' ? noteTitle(n) : '';
   if (!f && !topic) return '';
-  const ico = f ? (f.image ? `<img src="${esc(f.image)}" alt="">` : folderIcon(f)) : icon('memo');
+  const ico = f ? folderIcon(f) : icon('memo');
   return `<span class="tag" style="${fc(f)}">${ico}${esc([f?.name, topic].filter(Boolean).join(' · '))}</span>`;
 }
 
-// opts: showTag, showDate
+// opts: showTag, showDate, group (для перетаскивания), words (подсветка поиска)
 function taskRow(t, opts = {}) {
   const today = ymd();
   const meta = [];
+  if (t.pinned && !t.done) meta.push(`<span class="pin-mark">${icon('pin')}</span>`);
   if (opts.showDate && t.date) meta.push(`<span class="${!t.done && t.date < today ? 'late' : ''}">${esc(dateShort(t.date))}</span>`);
   if (t.remind && t.date) meta.push(`<span class="has-note">${icon('bell')} ${esc(t.remind)}</span>`);
   if (opts.showTag !== false) meta.push(taskTag(t));
   if (t.note.trim()) meta.push(`<span class="has-note">${icon('memo')}</span>`);
-  return `<div class="task-wrap">
-    <div class="task-bg">${icon('move')}Перенести</div>
+  const title = opts.words ? hl(t.title, opts.words) : esc(t.title);
+  return `<div class="task-wrap"${opts.group ? ` data-group="${opts.group}" data-id="${t.id}"` : ''}>
+    <div class="task-bg l">${icon('move')}Перенести</div>
+    <div class="task-bg r">${t.pinned ? 'Открепить' : 'Закрепить'}${icon('pin')}</div>
     <div class="task${t.done ? ' done' : ''}" data-id="${t.id}">
       <button class="check" data-act="toggle" data-id="${t.id}" aria-label="Готово">${icon('check')}</button>
       <button class="t-main" data-act="task" data-id="${t.id}">
-        <div class="t-title">${esc(t.title) || '<span style="color:var(--muted)">Без названия</span>'}</div>
+        <div class="t-title">${title || '<span style="color:var(--muted)">Без названия</span>'}</div>
         <div class="t-meta">${meta.join('')}</div>
       </button>
     </div>
@@ -642,21 +835,33 @@ function addRow(placeholder, { date = '', key }) {
     <input data-add="${key}" data-date="${date}" placeholder="${esc(placeholder)}" enterkeyhint="done" autocomplete="off"></label>`;
 }
 
+// opts: showFolder, words (поиск), group (перетаскивание и свайпы в папке)
 function noteRow(n, opts = {}) {
   const st = noteStats(n);
-  const prev = notePreview(n);
+  let prev = notePreview(n);
+  if (opts.words) {
+    const body = noteText(n).split('\n');
+    if (body[0] === noteTitle(n)) body.shift();
+    prev = snippet(body.join('\n'), opts.words);
+  }
   const side = [
     st.total ? `<span class="n-stat${st.open ? '' : ' ok'}">${icon('check')}${st.total - st.open}/${st.total}</span>` : '',
     st.files ? `<span class="n-stat">${icon('clip')}${st.files}</span>` : '',
   ].join('');
-  return `<button class="note-row" data-act="note" data-id="${n.id}">
+  const row = `<button class="note-row" data-act="note" data-id="${n.id}">
     <div class="n-main">
-      <div class="n-title">${esc(noteTitle(n))}</div>
-      <div class="n-prev"><b>${esc(when(n.updatedAt))}</b>${esc(prev) || 'Пусто'}</div>
+      <div class="n-title">${n.pinned && !opts.group ? `<span class="pin-mark">${icon('pin')}</span>` : ''}${opts.words ? hl(noteTitle(n), opts.words) : esc(noteTitle(n))}</div>
+      <div class="n-prev"><b>${esc(when(n.updatedAt))}</b>${(opts.words ? hl(prev, opts.words) : esc(prev)) || 'Пусто'}</div>
       ${opts.showFolder ? taskTag({ folder: n.folder, noteId: '' }) : ''}
     </div>
     ${side ? `<div class="n-side">${side}</div>` : ''}
   </button>`;
+  if (!opts.group) return row;
+  return `<div class="nrow" data-id="${n.id}" data-group="${opts.group}">
+    <div class="nbg l">${icon('pin')}${n.pinned ? 'Открепить' : 'Закрепить'}</div>
+    <div class="nbg r">Удалить${icon('trash')}</div>
+    ${row}
+  </div>`;
 }
 
 function calGrid(month, sel, act, stats = dayStats()) {
@@ -674,7 +879,17 @@ function calGrid(month, sel, act, stats = dayStats()) {
   return `<div class="cal"><div class="cal-head">${['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс'].map((w) => `<span>${w}</span>`).join('')}</div><div class="cal-grid">${cells}</div></div>`;
 }
 
+const searchBox = (scope, q, ph) => `<label class="search">${icon('search')}<input type="search" data-search="${scope}" value="${esc(q)}" placeholder="${esc(ph)}" enterkeyhint="search" autocomplete="off" autocorrect="off"></label>`;
+
 /* ---------------- Экраны ---------------- */
+
+function taskList(open, done, add) {
+  return `<div class="tasks" data-order>
+    ${open.map((t) => taskRow(t, { group: t.pinned ? 'pin' : 'open' })).join('')}
+    ${add}
+    ${done.map((t) => taskRow(t)).join('')}
+  </div>`;
+}
 
 function viewToday() {
   const d = ui.day, today = ymd();
@@ -715,12 +930,8 @@ function viewToday() {
 
   ${total ? `<div class="progress-line"><span>${done.length} из ${total} ${plural(total, ['дела', 'дел', 'дел'])}</span><span class="bar"><i style="width:${Math.round(done.length / total * 100)}%"></i></span></div>`
     : `<div class="section-title"><span>Дела</span></div>`}
-  <div class="tasks">
-    ${open.map((t) => taskRow(t)).join('')}
-    ${addRow(d === today ? 'Что сделать сегодня?' : 'Добавить дело', { date: d, key: 'day' })}
-    ${done.map((t) => taskRow(t)).join('')}
-  </div>
-  <div class="hint" style="text-align:center;margin-top:14px">Смахни неделю влево или вправо, дело — вправо, чтобы перенести</div>`;
+  ${taskList(open, done, addRow(d === today ? 'Что сделать сегодня?' : 'Добавить дело', { date: d, key: 'day' }))}
+  <div class="hint" style="text-align:center;margin-top:14px">Дело: вправо — перенести, влево — закрепить, удержать — переставить</div>`;
 }
 
 // Папки стоят в ячейках сетки 3×N; order — номер ячейки, пустые ячейки допустимы
@@ -751,9 +962,7 @@ function moveFolderToSlot(id, slot) {
   patch('folders', id, { order: slot });
 }
 
-function viewFolders() {
-  if (ui.folder && liveFolder(ui.folder)) return viewFolder(liveFolder(ui.folder));
-  ui.folder = '';
+function foldersGrid() {
   const list = placeFolders();
   const today = ymd();
   const bySlot = {};
@@ -776,29 +985,65 @@ function viewFolders() {
   }
   const inbox = inboxCount();
   return `
-  <div class="topbar"><div><h1>Папки</h1></div>
-    <div class="top-actions">
-      ${ui.arrange ? '<button class="pill-btn" data-act="arrange-done">Готово</button>'
-        : `<button class="pill-btn" data-act="arrange">Изменить</button><button class="icon-btn" data-act="settings" aria-label="Настройки">${icon('gear')}</button>`}
-    </div></div>
-  ${ui.arrange ? '<div class="hint" style="margin:-6px 4px 12px">Перетащи папку в любую ячейку. Нажми на папку, чтобы переименовать, на «+» — чтобы создать.</div>' : ''}
   <div class="fgrid${ui.arrange ? ' arranging' : ''}">${cells}</div>
   ${inbox && !ui.arrange ? `<div class="section-title"><span>Не разложено</span></div>
     <div class="card"><button class="note-row" data-act="tab" data-tab="inbox"><div class="n-main"><div class="n-title">Входящие · ${inbox}</div><div class="n-prev">Темы и дела без папки</div></div></button></div>` : ''}
   ${!ui.arrange ? '<div class="hint" style="text-align:center;margin-top:18px">Удерживай папку, чтобы переставить</div>' : ''}`;
 }
 
+function searchAll(q) {
+  const words = qWords(q);
+  if (!words.length) return foldersGrid();
+  const fs = folders().filter((f) => matches(f.name, words));
+  const ns = live('notes').filter((n) => matches(noteTitle(n) + '\n' + noteText(n), words)).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 60);
+  const ts = live('tasks').filter((t) => matches(t.title + '\n' + t.note, words)).sort((a, b) => a.done - b.done || b.updatedAt - a.updatedAt).slice(0, 60);
+  if (!fs.length && !ns.length && !ts.length) return `<div class="empty">Ничего не найдено</div>`;
+  return `
+  ${fs.length ? `<div class="section-title"><span>Папки</span></div><div class="card">${fs.map((f) => `<button class="note-row" data-act="folder" data-id="${f.id}" style="${fc(f)}"><span class="f-ico sm${f.image ? ' img' : ''}">${folderIcon(f)}</span><div class="n-main"><div class="n-title">${hl(f.name, words)}</div></div></button>`).join('')}</div>` : ''}
+  ${ns.length ? `<div class="section-title"><span>Темы · ${ns.length}</span></div><div class="card">${ns.map((n) => noteRow(n, { showFolder: true, words })).join('')}</div>` : ''}
+  ${ts.length ? `<div class="section-title"><span>Дела · ${ts.length}</span></div><div class="tasks">${ts.map((t) => taskRow(t, { showDate: true, words })).join('')}</div>` : ''}`;
+}
+
+function viewFolders() {
+  if (ui.folder && liveFolder(ui.folder)) return viewFolder(liveFolder(ui.folder));
+  ui.folder = '';
+  return `
+  <div class="topbar"><div><h1>Папки</h1></div>
+    <div class="top-actions">
+      ${ui.arrange ? '<button class="pill-btn" data-act="arrange-done">Готово</button>'
+        : `<button class="pill-btn" data-act="arrange">Изменить</button><button class="icon-btn" data-act="settings" aria-label="Настройки">${icon('gear')}</button>`}
+    </div></div>
+  ${ui.arrange ? '<div class="hint" style="margin:-6px 4px 12px">Перетащи папку в любую ячейку. Нажми на папку, чтобы переименовать, на «+» — чтобы создать.</div>'
+    : searchBox('all', ui.qAll, 'Поиск по всем папкам')}
+  <div id="fbody">${!ui.arrange && ui.qAll.trim() ? searchAll(ui.qAll) : foldersGrid()}</div>`;
+}
+
+function folderBody(f) {
+  const notes = live('notes').filter((n) => n.folder === f.id).sort(sortNotes);
+  const words = qWords(ui.qFolder);
+  if (words.length) {
+    const found = notes.filter((n) => matches(noteTitle(n) + '\n' + noteText(n), words));
+    return found.length ? `<div class="card">${found.map((n) => noteRow(n, { words })).join('')}</div>` : '<div class="empty">Ничего не найдено</div>';
+  }
+  const pinned = notes.filter((n) => n.pinned), rest = notes.filter((n) => !n.pinned);
+  if (!notes.length) return `<div class="empty">Тем пока нет.<br>Нажми <b>+</b>, чтобы создать первую.</div>`;
+  return `
+  ${pinned.length ? `<div class="section-title"><span>${icon('pin')} Закреплённые</span></div><div class="card nlist">${pinned.map((n) => noteRow(n, { group: 'pin' })).join('')}</div>` : ''}
+  ${rest.length ? `${pinned.length ? '<div class="section-title"><span>Темы</span></div>' : ''}<div class="card nlist">${rest.map((n) => noteRow(n, { group: 'rest' })).join('')}</div>` : ''}
+  <div class="hint" style="text-align:center;margin-top:14px">Тема: вправо — закрепить, влево — удалить, удержать — переставить</div>`;
+}
+
 function viewFolder(f) {
-  const notes = live('notes').filter((n) => n.folder === f.id).sort((a, b) => (b.pinned - a.pinned) || b.updatedAt - a.updatedAt);
+  const count = live('notes').filter((n) => n.folder === f.id).length;
   return `
   <button class="back" data-act="folders-back">${icon('chevL')}Папки</button>
   <div class="topbar">
     <div class="folder-head" style="${fc(f)}"><span class="f-ico${f.image ? ' img' : ''}">${folderIcon(f)}</span><h1>${esc(f.name)}</h1></div>
     <div class="top-actions"><button class="icon-btn" data-act="folder-edit" data-id="${f.id}" aria-label="Изменить папку">${icon('edit')}</button></div>
   </div>
-  <div class="sub-count">${notes.length} ${plural(notes.length, ['тема', 'темы', 'тем'])}</div>
-  ${notes.length ? `<div class="card">${notes.map((n) => noteRow(n)).join('')}</div>`
-    : `<div class="empty">Тем пока нет.<br>Нажми <b>+</b>, чтобы создать первую.</div>`}`;
+  <div class="sub-count">${count} ${plural(count, ['тема', 'темы', 'тем'])}</div>
+  ${count ? searchBox('folder', ui.qFolder, 'Поиск в папке') : ''}
+  <div id="fbody">${folderBody(f)}</div>`;
 }
 
 function viewCalendar() {
@@ -814,11 +1059,7 @@ function viewCalendar() {
   </div>
   <div class="card" style="margin-top:10px">${calGrid(ui.calMonth, d, 'cal-day')}</div>
   <div class="section-title"><span>${esc(dateLong(d))}</span><button data-act="open-day" data-d="${d}">В ежедневник</button></div>
-  <div class="tasks">
-    ${open.map((t) => taskRow(t)).join('')}
-    ${addRow('Добавить дело', { date: d, key: 'cal' })}
-    ${done.map((t) => taskRow(t)).join('')}
-  </div>`;
+  ${taskList(open, done, addRow('Добавить дело', { date: d, key: 'cal' }))}`;
 }
 
 function viewInbox() {
@@ -829,15 +1070,15 @@ function viewInbox() {
   <div class="section-title"><span>Темы</span><button data-act="note-new" data-folder="">+ Тема</button></div>
   ${notes.length ? `<div class="card">${notes.map((n) => noteRow(n)).join('')}</div>` : '<div class="empty">Пусто — всё разложено</div>'}
   <div class="section-title"><span>Дела без даты</span></div>
-  <div class="tasks">
-    ${addRow('Быстрое дело', { key: 'inbox' })}
-    ${tasks.map((t) => taskRow(t)).join('')}
-  </div>`;
+  ${taskList(tasks, [], addRow('Быстрое дело', { key: 'inbox' }))}`;
 }
 
 function render() {
   document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === ui.tab));
   const views = { today: viewToday, folders: viewFolders, calendar: viewCalendar, inbox: viewInbox };
+  // Поле поиска не пересоздаём, если в нём курсор: обновляем только результаты
+  const active = document.activeElement;
+  if (active?.dataset?.search && $('#fbody')) { renderSearch(active); return; }
   $('#view').innerHTML = (views[ui.tab] || viewToday)();
   const n = inboxCount();
   $('#inbox-badge').textContent = n ? String(n) : '';
@@ -845,6 +1086,12 @@ function render() {
     $(`[data-add="${ui.refocus}"]`)?.focus();
     ui.refocus = '';
   }
+}
+function renderSearch(inp) {
+  const body = $('#fbody');
+  if (!body) return;
+  if (inp.dataset.search === 'all') body.innerHTML = ui.qAll.trim() ? searchAll(ui.qAll) : foldersGrid();
+  else if (liveFolder(ui.folder)) body.innerHTML = folderBody(liveFolder(ui.folder));
 }
 
 /* ---------------- Выбор даты (и времени напоминания) ---------------- */
@@ -893,13 +1140,20 @@ function moveTasks(ids, date) {
     refreshTopSheet();
   });
 }
+function togglePinTask(id) {
+  const t = byId('tasks', id);
+  if (!t) return;
+  patch('tasks', id, { pinned: !t.pinned });
+  render();
+  toast(t.pinned ? 'Дело откреплено' : 'Дело закреплено сверху');
+}
 
 /* ---------------- Быстрое добавление (кнопка +) ---------------- */
 
 function folderChips(sel, act, noneLabel) {
   return `<div class="chips">
     <button class="chip${!liveFolder(sel) ? ' on' : ''}" data-act="${act}" data-id="">${icon('inbox')}${noneLabel}</button>
-    ${folders().map((f) => `<button class="chip${sel === f.id ? ' on' : ''}" style="${fc(f)}" data-act="${act}" data-id="${f.id}">${f.image ? `<img src="${esc(f.image)}" alt="">` : folderIcon(f)}${esc(f.name)}</button>`).join('')}
+    ${folders().map((f) => `<button class="chip${sel === f.id ? ' on' : ''}" style="${fc(f)}" data-act="${act}" data-id="${f.id}">${folderIcon(f)}${esc(f.name)}</button>`).join('')}
   </div>`;
 }
 
@@ -912,7 +1166,7 @@ function openCapture() {
   const paintOpts = (e) => {
     const dates = [['Сегодня', today], ['Завтра', addDays(today, 1)], ['Без даты', '']];
     const custom = c.date && !dates.some(([, d]) => d === c.date);
-    const topics = c.folder ? live('notes').filter((n) => n.folder === c.folder && n.title !== 'Дела').sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 8) : [];
+    const topics = c.folder ? live('notes').filter((n) => n.folder === c.folder && n.title !== 'Дела').sort(sortNotes).slice(0, 8) : [];
     $('.opts', e.body).innerHTML = `
       <div class="field-label" style="margin-top:12px">Тип</div>
       <div class="seg"><button class="${c.kind === 'task' ? 'on' : ''}" data-act="kind" data-k="task">Дело</button><button class="${c.kind === 'note' ? 'on' : ''}" data-act="kind" data-k="note">Тема</button></div>
@@ -947,8 +1201,9 @@ function openCapture() {
       toast(lines.length > 1 ? `Добавлено ${lines.length} ${plural(lines.length, ['дело', 'дела', 'дел'])}` : 'Дело добавлено');
     } else {
       const [first, ...rest] = text.split('\n');
-      const n = newNote({ folder: c.folder, title: first.trim().slice(0, 120), blocks: normalize([{ t: 'text', text: rest.join('\n').trim() }]) });
-      upsert('notes', n);
+      const title = first.trim().slice(0, 120);
+      const html = `<h1>${esc(title)}</h1>` + rest.map((l) => `<div>${esc(l) || '<br>'}</div>`).join('');
+      upsert('notes', newNote({ folder: c.folder, title, html }));
       closeSheet();
       toast(c.folder ? `Тема в «${liveFolder(c.folder).name}»` : 'Тема во «Входящих»');
     }
@@ -986,7 +1241,9 @@ function openTask(id) {
     const title = $('.t-edit', entry.body)?.value.replace(/\n/g, ' ').trim() ?? '';
     const note = $('.t-note', entry.body)?.value ?? '';
     const t = cur();
-    if (t && !t.deleted && (t.title !== title || t.note !== note)) patch('tasks', id, { title: title || t.title, note });
+    if (!t || t.deleted || (t.title === title && t.note === note)) return;
+    patch('tasks', id, { title: title || t.title, note });
+    if (title && title !== t.title) setTaskTitleInNote(cur());
   };
   const paintOpts = (e) => {
     const t = cur();
@@ -1005,6 +1262,7 @@ function openTask(id) {
       <div class="field-label">Папка</div>
       ${folderChips(t.folder, 'folder-pick', 'Без папки')}
       ${n ? `<button class="btn secondary small" data-act="open-topic" style="margin-top:14px">Открыть тему «${esc(noteTitle(n).slice(0, 40))}»</button>` : ''}
+      <button class="btn secondary small" data-act="pin" style="margin-top:10px">${icon('pin')} ${t.pinned ? 'Открепить' : 'Закрепить сверху'}</button>
       <button class="btn${t.done ? ' secondary' : ''}" data-act="done">${t.done ? 'Вернуть в работу' : 'Готово ✓'}</button>
       <button class="btn danger small" data-act="del">Удалить дело</button>`;
   };
@@ -1040,12 +1298,9 @@ function openTask(id) {
       'remind-clear': () => { patch('tasks', id, { remind: '' }); paintOpts(entry); },
       'folder-pick': (el) => { flush(); attachTask(id, el.dataset.id, ''); paintOpts(entry); },
       'open-topic': () => { const nid = cur().noteId; flush(); closeSheet(); openNote(nid); },
+      pin: () => { patch('tasks', id, { pinned: !cur().pinned }); paintOpts(entry); },
       done: () => { flush(); toggleTask(id); closeSheet(); },
-      del: () => {
-        flush();
-        deleteTask(id);
-        closeSheet();
-      },
+      del: () => { flush(); deleteTask(id); closeSheet(); },
     },
   });
 }
@@ -1054,13 +1309,11 @@ function deleteTask(id) {
   const t = byId('tasks', id);
   if (!t) return;
   const n = liveById('notes', t.noteId);
-  const pos = n ? n.blocks.findIndex((b) => b.t === 'task' && b.id === id) : -1;
   patch('tasks', id, { deleted: true });
-  if (n) upsert('notes', { ...n, blocks: normalize(copyBlocks(n.blocks)) });
+  if (n) detachTask(t);
   toast('Дело удалено', () => {
     patch('tasks', id, { deleted: false });
-    const cur = liveById('notes', t.noteId);
-    if (cur && pos >= 0) { const bl = copyBlocks(cur.blocks); bl.splice(Math.min(pos, bl.length), 0, { t: 'task', id }); upsert('notes', { ...cur, blocks: normalize(bl) }); }
+    if (n) attachTask(id, n.folder, n.id);
     render();
   });
 }
@@ -1080,210 +1333,404 @@ function toggleTask(id, rowEl) {
 
 /* ---------------- Тема: редактор как в iOS Заметках ---------------- */
 
+const HILITES = [
+  ['yellow', 'rgba(255, 204, 0, 0.42)'],
+  ['green', 'rgba(52, 199, 89, 0.34)'],
+  ['blue', 'rgba(10, 132, 255, 0.28)'],
+  ['pink', 'rgba(255, 55, 95, 0.28)'],
+  ['purple', 'rgba(175, 82, 222, 0.3)'],
+];
+const IMG_SIZES = [['l', 'Большое', 'на всю ширину'], ['m', 'Среднее', 'по 2 в ряд'], ['s', 'Маленькое', 'по 3 в ряд']];
+const BLOCK_TAGS = /^(DIV|P|H1|H2|H3|PRE|BLOCKQUOTE|UL|OL|FIGURE)$/;
+
 function openNote(id, folder = '') {
   const existing = id && liveById('notes', id);
   if (id && !existing) return;
   let note = existing ? { ...existing } : newNote({ folder });
-  let blocks = normalize(copyBlocks(note.blocks));
-  let saved = !!existing, timer = null, lastFocus = null;
-  let ctx = null; // лист редактора (доступен уже во время его построения)
-  const pending = {}; // id дела → название, пока печатают
+  let saved = !!existing, timer = null, ctx = null, ed = null, savedRange = null, panelOpen = false, lastTouch = 0;
 
-  const titleEl = () => $('.note-title', ctx.body);
-  const isEmpty = () => !titleEl().value.trim() && blocks.every((b) => b.t === 'text' && !b.text.trim());
-
+  /* --- данные --- */
+  function serialize() {
+    const c = ed.cloneNode(true);
+    c.querySelectorAll('[data-m]').forEach((m) => m.remove());
+    return sanitize(c.innerHTML);
+  }
+  // Пункты чек-листа ↔ дела: новые создаём, исчезнувшие удаляем
+  function scan() {
+    const seen = new Set();
+    for (const el of ed.querySelectorAll('.ck')) {
+      let tid = el.dataset.task;
+      const title = el.textContent.replace(/[\s​]+/g, ' ').trim();
+      let t = tid && byId('tasks', tid);
+      if (!tid || seen.has(tid) || (t && t.noteId && t.noteId !== note.id)) {
+        t = newTask({ title, noteId: note.id, folder: note.folder });
+        el.dataset.task = t.id;
+        el.classList.remove('done');
+        tid = t.id;
+      } else if (!t) {
+        newTask({ id: tid, title, noteId: note.id, folder: note.folder });
+      } else if (t.deleted || t.title !== title || t.noteId !== note.id) {
+        patch('tasks', tid, { deleted: false, title, noteId: note.id, folder: note.folder });
+      }
+      seen.add(tid);
+    }
+    for (const t of noteTasks(note)) if (!seen.has(t.id)) patch('tasks', t.id, { deleted: true });
+    const seenF = new Set([...ed.querySelectorAll('figure.att')].map((f) => f.dataset.file));
+    for (const f of state.files) {
+      if (f.noteId !== note.id) continue;
+      if (!seenF.has(f.id) && !f.deleted) patch('files', f.id, { deleted: true });
+      else if (seenF.has(f.id) && f.deleted) patch('files', f.id, { deleted: false });
+    }
+  }
   function saveNote(force) {
     clearTimeout(timer);
-    for (const [tid, title] of Object.entries(pending)) {
-      const t = byId('tasks', tid);
-      if (t && t.title !== title) patch('tasks', tid, { title });
-      delete pending[tid];
-    }
-    if (!saved && isEmpty() && !force) return;
-    const title = titleEl().value;
-    const nb = normalize(copyBlocks(blocks));
+    if (!ed) return;
+    scan();
+    const html = serialize();
+    const lines = htmlLines(html);
+    const empty = !lines.length;
+    if (!saved && empty && !force) return;
+    const title = (lines.find((l) => l.text && l.task === undefined)?.text || '').slice(0, 120);
     const cur = byId('notes', note.id);
-    if (cur && !cur.deleted && cur.title === title && cur.folder === note.folder && JSON.stringify(cur.blocks) === JSON.stringify(nb)) return;
-    note = { ...(cur || note), title, blocks: nb, folder: note.folder, deleted: false };
+    if (cur && !cur.deleted && cur.html === html && cur.folder === note.folder && cur.title === title) return;
+    note = { ...(cur || note), html, title, folder: note.folder, deleted: false };
     upsert('notes', note);
     saved = true;
   }
-  const later = () => { clearTimeout(timer); timer = setTimeout(() => saveNote(), 600); };
+  const later = () => { clearTimeout(timer); timer = setTimeout(() => saveNote(), 700); };
 
-  function blockHtml(b, i) {
-    if (b.t === 'text') {
-      const ph = blocks.length === 1 ? 'Текст, чек-листы, файлы…' : '';
-      return `<textarea class="b-text" data-i="${i}" rows="1" placeholder="${ph}">${esc(b.text)}</textarea>`;
+  /* --- оформление: галочки, даты, вложения --- */
+  function decorate() {
+    const today = ymd();
+    for (const el of ed.querySelectorAll('.ck')) {
+      const t = liveById('tasks', el.dataset.task);
+      el.classList.toggle('done', !!t?.done);
+      el.classList.toggle('late', !!(t && !t.done && t.date && t.date < today));
+      if (t?.date) el.dataset.dl = dateShort(t.date) + (t.remind ? ' · ' + t.remind : '');
+      else delete el.dataset.dl;
     }
-    if (b.t === 'task') {
-      const t = liveById('tasks', b.id);
-      if (!t) return `<div data-i="${i}" hidden></div>`;
-      const late = !t.done && t.date && t.date < ymd();
-      return `<div class="b-task${t.done ? ' done' : ''}" data-i="${i}">
-        <button class="check" data-act="b-toggle" data-i="${i}" aria-label="Готово">${icon('check')}</button>
-        <textarea class="b-ttl" data-i="${i}" rows="1" enterkeyhint="next">${esc(pending[t.id] ?? t.title)}</textarea>
-        <button class="b-date${t.date ? ' set' : ''}${late ? ' late' : ''}" data-act="b-date" data-i="${i}" aria-label="Дата">${t.date ? esc(dateShort(t.date)) + (t.remind ? ' · ' + esc(t.remind) : '') : icon('cal')}</button>
-      </div>`;
-    }
-    const f = liveById('files', b.id);
-    if (!f) return `<div data-i="${i}" hidden></div>`;
-    const img = f.mime.startsWith('image/');
-    return `<div class="b-file${img ? ' is-img' : ''}" data-i="${i}">
-      <button class="f-open" data-act="f-open" data-fid="${f.id}">
-        ${img ? `<span class="f-thumb" data-fid="${f.id}"></span>` : `<span class="f-icon">${icon('file')}</span><span class="f-meta"><b>${esc(f.name)}</b><small>${fmtSize(f.size)}</small></span>`}
-      </button>
-      <button class="f-del" data-act="f-del" data-i="${i}" aria-label="Удалить файл">${icon('x')}</button>
-    </div>`;
+    for (const fig of ed.querySelectorAll('figure.att')) if (!fig.firstChild) fillFigure(fig);
+    ed.classList.toggle('blank', !ed.textContent.trim() && !ed.querySelector('.ck, figure'));
   }
-
-  function renderBlocks() {
-    const wrap = $('.blocks', ctx.body);
-    wrap.innerHTML = blocks.map(blockHtml).join('');
-    wrap.querySelectorAll('textarea').forEach(autoGrow);
-    wrap.querySelectorAll('.b-file').forEach((el) => {
-      const fid = $('.f-open', el).dataset.fid;
-      loadFile(fid).then((c) => {
-        const th = $('.f-thumb', el);
-        if (!th) return;
-        th.innerHTML = c ? `<img src="${c.url}" alt="">` : '<span class="f-wait">Файл ещё не выгружен с другого устройства</span>';
-      });
+  function fillFigure(fig) {
+    const f = byId('files', fig.dataset.file);
+    if (!f) { fig.innerHTML = '<span class="f-wait">Файл не найден</span>'; return; }
+    const img = f.mime.startsWith('image/');
+    fig.classList.toggle('is-img', img);
+    fig.innerHTML = (img ? '<span class="f-thumb"></span>'
+      : `<span class="f-icon">${icon('file')}</span><span class="f-meta"><b>${esc(f.name)}</b><small>${fmtSize(f.size)}</small></span>`)
+      + `<span class="f-del" role="button" aria-label="Удалить файл">${icon('x')}</span>`;
+    if (img) loadFile(f.id).then((c) => {
+      const th = $('.f-thumb', fig);
+      if (th) th.innerHTML = c ? `<img src="${c.url}" alt="">` : '<span class="f-wait">Файл ещё не выгружен с другого устройства</span>';
     });
   }
 
-  function focusAt(block, pos) {
-    const i = blocks.indexOf(block);
-    if (i < 0) return;
-    const el = $(`.blocks [data-i="${i}"]`, ctx.body);
-    const ta = el?.matches('textarea') ? el : el?.querySelector('textarea');
-    if (!ta) return;
-    const p = pos === 'end' ? ta.value.length : Math.min(pos, ta.value.length);
-    ta.focus();
-    ta.setSelectionRange(p, p);
-    lastFocus = { i, pos: p };
+  /* --- выделение и блоки --- */
+  const sel = () => window.getSelection();
+  function rangeIn() {
+    const s = sel();
+    if (s.rangeCount && ed.contains(s.getRangeAt(0).commonAncestorContainer)) return s.getRangeAt(0);
+    return null;
   }
-  function restructure(focus) {
-    blocks = normalize(blocks, focus);
-    renderBlocks();
-    if (focus) focusAt(focus.block, focus.pos);
-    saveNote(true);
+  function restoreSel() {
+    if (rangeIn()) return rangeIn();
+    if (document.activeElement !== ed) ed.focus({ preventScroll: true });
+    const s = sel();
+    s.removeAllRanges();
+    if (savedRange && ed.contains(savedRange.startContainer)) s.addRange(savedRange);
+    else { const r = document.createRange(); r.selectNodeContents(ed); r.collapse(false); s.addRange(r); }
+    return s.getRangeAt(0);
   }
-  function makeTask(title) {
-    saveNote(true);
-    return newTask({ title, noteId: note.id, folder: note.folder });
+  const topOf = (node) => { while (node && node.parentNode !== ed) node = node.parentNode; return node?.nodeType === 1 ? node : null; };
+  const closestIn = (node, selector) => { const el = node?.nodeType === 1 ? node : node?.parentElement; const r = el?.closest(selector); return r && ed.contains(r) ? r : null; };
+  function placeCaret(el, atEnd) {
+    const r = document.createRange();
+    r.selectNodeContents(el);
+    r.collapse(!atEnd);
+    sel().removeAllRanges();
+    sel().addRange(r);
   }
-  function dropTask(tid) {
-    delete pending[tid];
-    patch('tasks', tid, { deleted: true });
+  function atStart(el, r) {
+    const pre = document.createRange();
+    pre.selectNodeContents(el);
+    pre.setEnd(r.startContainer, r.startOffset);
+    return !pre.toString().replace(/​/g, '');
   }
-  const titleOf = (b) => pending[b.id] ?? byId('tasks', b.id)?.title ?? '';
-  const prevEditable = (i) => { for (let j = i - 1; j >= 0; j--) if (blocks[j].t !== 'file') return blocks[j]; return null; };
-
-  // Enter в пункте списка: новый пункт; на пустом — выход из списка
-  function enterInTask(i, el) {
-    const b = blocks[i];
-    const v = el.value, c = el.selectionStart;
-    if (!v.trim()) {
-      dropTask(b.id);
-      const nb = { t: 'text', text: '' };
-      blocks.splice(i, 1, nb);
-      restructure({ block: nb, pos: 0 });
-      return;
+  // Блоки под выделением: верхний уровень, а для списков — пункты
+  function units() {
+    const r = rangeIn() || restoreSel();
+    const out = [];
+    for (const b of ed.children) {
+      if (!r.intersectsNode(b) && !(b.contains(r.startContainer))) continue;
+      if (b.tagName === 'UL' || b.tagName === 'OL') { for (const li of b.children) if (r.intersectsNode(li) || li.contains(r.startContainer)) out.push(li); }
+      else if (b.tagName !== 'FIGURE') out.push(b);
     }
-    if (c === 0) {
-      const t = makeTask('');
-      blocks.splice(i, 0, { t: 'task', id: t.id });
-      restructure({ block: b, pos: 0 });
-      return;
+    if (!out.length) {
+      const d = document.createElement('div');
+      d.innerHTML = '<br>';
+      ed.append(d);
+      placeCaret(d);
+      out.push(d);
     }
-    pending[b.id] = v.slice(0, c).trimEnd();
-    const t = makeTask(v.slice(c).trimStart());
-    const nb = { t: 'task', id: t.id };
-    blocks.splice(i + 1, 0, nb);
-    restructure({ block: nb, pos: 0 });
+    return out;
   }
-  function backspaceAtStart(i, el) {
-    const b = blocks[i];
-    if (b.t === 'task') {
-      const v = el.value;
-      dropTask(b.id);
-      if (!v) {
-        blocks.splice(i, 1);
-        const prev = prevEditable(i);
-        restructure(prev ? { block: prev, pos: 'end' } : null);
-      } else {
-        const nb = { t: 'text', text: v };
-        blocks.splice(i, 1, nb);
-        restructure({ block: nb, pos: 0 });
+  const listKind = (l) => (l.tagName === 'OL' ? 'OL' : l.classList.contains('dash') ? 'DASH' : 'UL');
+  const kindOf = (u) => (u.classList.contains('ck') ? 'CK' : u.tagName === 'LI' ? listKind(u.parentElement) : u.tagName === 'P' ? 'DIV' : u.tagName);
+  // Выделение переживает перестройку блоков благодаря временным меткам
+  function withMarkers(fn) {
+    const r = rangeIn() || restoreSel();
+    const m1 = document.createElement('span'), m2 = document.createElement('span');
+    m1.dataset.m = '1'; m2.dataset.m = '2';
+    const e = r.cloneRange(); e.collapse(false); e.insertNode(m2);
+    const s = r.cloneRange(); s.collapse(true); s.insertNode(m1);
+    fn();
+    const nr = document.createRange();
+    nr.setStartAfter(m1);
+    nr.setEndBefore(m2);
+    m1.remove(); m2.remove();
+    sel().removeAllRanges();
+    sel().addRange(nr);
+  }
+  function moveKids(from, to) {
+    for (const c of [...from.childNodes]) { if (from.tagName === 'LI' && /^(UL|OL)$/.test(c.nodeName)) continue; to.append(c); }
+    if (!to.textContent && !to.querySelector('br')) to.append(document.createElement('br'));
+  }
+  function outOfList(li, el) {
+    const list = li.parentElement;
+    const after = [...list.children].slice([...list.children].indexOf(li) + 1);
+    let tail = null;
+    if (after.length) { tail = list.cloneNode(false); tail.append(...after); }
+    list.after(el);
+    if (tail) el.after(tail);
+    li.remove();
+    if (!list.children.length) list.remove();
+  }
+  function makeBlock(kind) {
+    const el = document.createElement(kind === 'CK' ? 'div' : kind);
+    if (kind === 'CK') el.className = 'ck';
+    return el;
+  }
+  function setBlocks(kind) {
+    withMarkers(() => {
+      const us = units();
+      const to = us.every((u) => kindOf(u) === kind) && kind !== 'DIV' ? 'DIV' : kind;
+      for (const u of us) {
+        if (kindOf(u) === to) continue;
+        const el = makeBlock(to);
+        if (u.dataset.ind) el.dataset.ind = u.dataset.ind;
+        moveKids(u, el);
+        if (u.tagName === 'LI') outOfList(u, el); else u.replaceWith(el);
       }
-      return true;
+    });
+    changed();
+  }
+  function toggleList(kind) {
+    withMarkers(() => {
+      const us = units();
+      if (us.every((u) => kindOf(u) === kind)) {
+        for (const u of us) { const d = makeBlock('DIV'); moveKids(u, d); outOfList(u, d); }
+        return;
+      }
+      const lists = new Set(us.map((u) => (u.tagName === 'LI' ? u.parentElement : null)));
+      if (lists.size === 1 && !lists.has(null)) {
+        // Один список — меняем только его вид
+        const l = [...lists][0];
+        const nl = document.createElement(kind === 'OL' ? 'ol' : 'ul');
+        if (kind === 'DASH') nl.className = 'dash';
+        nl.append(...l.childNodes);
+        l.replaceWith(nl);
+        return;
+      }
+      const blocks = us.map((u) => { if (u.tagName !== 'LI') return u; const d = makeBlock('DIV'); moveKids(u, d); outOfList(u, d); return d; });
+      const nl = document.createElement(kind === 'OL' ? 'ol' : 'ul');
+      if (kind === 'DASH') nl.className = 'dash';
+      blocks[0].before(nl);
+      for (const b of blocks) { const li = document.createElement('li'); moveKids(b, li); nl.append(li); b.remove(); }
+    });
+    changed();
+  }
+  function indent(d) {
+    for (const u of units()) {
+      const v = Math.max(0, Math.min(4, (Number(u.dataset.ind) || 0) + d));
+      if (v) u.dataset.ind = v; else delete u.dataset.ind;
     }
-    if (b.t === 'text' && i > 0) {
-      const prev = prevEditable(i);
-      if (!prev) return false;
-      if (!el.value && i !== blocks.length - 1) blocks.splice(i, 1);
-      restructure({ block: prev, pos: 'end' });
-      return true;
-    }
-    return false;
+    changed();
+  }
+  function inline(cmd) {
+    restoreSel();
+    document.execCommand(cmd, false, null);
+    changed(true);
+  }
+  function hilite(color) {
+    restoreSel();
+    document.execCommand('styleWithCSS', false, true);
+    if (!document.execCommand('hiliteColor', false, color)) document.execCommand('backColor', false, color);
+    document.execCommand('styleWithCSS', false, false);
+    changed(true);
+  }
+  function changed(light) {
+    if (!light) { scan(); decorate(); }
+    else ed.classList.toggle('blank', !ed.textContent.trim() && !ed.querySelector('.ck, figure'));
+    later();
+    paintPanel();
   }
 
-  // Кнопка «чек-лист»: строка под курсором ↔ пункт списка
-  function toggleChecklist() {
-    const lf = lastFocus && blocks[lastFocus.i] ? lastFocus : null;
-    const b = lf && blocks[lf.i];
-    if (b?.t === 'text') {
-      const text = b.text, pos = Math.min(lf.pos, text.length);
-      const ls = text.lastIndexOf('\n', pos - 1) + 1;
-      let le = text.indexOf('\n', pos);
-      if (le < 0) le = text.length;
-      const t = makeTask(text.slice(ls, le).trim());
-      const nb = { t: 'task', id: t.id };
-      const parts = [];
-      if (ls > 0) parts.push({ t: 'text', text: text.slice(0, ls - 1) });
-      parts.push(nb);
-      if (le < text.length) parts.push({ t: 'text', text: text.slice(le + 1) });
-      blocks.splice(lf.i, 1, ...parts);
-      restructure({ block: nb, pos: 'end' });
-      return;
+  /* --- Enter и Backspace в чек-листе --- */
+  function enterInCk(ck, r) {
+    if (!r.collapsed) r.deleteContents();
+    const text = ck.textContent.replace(/​/g, '').trim();
+    const fresh = () => { const n = makeBlock('CK'); if (ck.dataset.ind) n.dataset.ind = ck.dataset.ind; return n; };
+    if (!text) {
+      // Enter на пустом пункте — выход из списка
+      const d = makeBlock('DIV');
+      if (ck.dataset.ind) d.dataset.ind = ck.dataset.ind;
+      d.innerHTML = '<br>';
+      ck.replaceWith(d);
+      placeCaret(d);
+    } else if (atStart(ck, r)) {
+      const n = fresh();
+      n.innerHTML = '<br>';
+      ck.before(n);
+    } else {
+      const tail = document.createRange();
+      tail.selectNodeContents(ck);
+      tail.setStart(r.startContainer, r.startOffset);
+      const n = fresh();
+      n.append(tail.extractContents());
+      if (!n.textContent.trim()) n.innerHTML = '<br>';
+      if (!ck.textContent.trim()) ck.innerHTML = '<br>';
+      ck.after(n);
+      placeCaret(n);
     }
-    if (b?.t === 'task') {
-      const v = titleOf(b);
-      dropTask(b.id);
-      const nb = { t: 'text', text: v };
-      blocks.splice(lf.i, 1, nb);
-      restructure({ block: nb, pos: 'end' });
-      return;
+    changed();
+  }
+  function onKey(e) {
+    if (e.isComposing) return;
+    const r = rangeIn();
+    if (!r) return;
+    const ck = closestIn(r.startContainer, '.ck');
+    if (e.key === 'Enter' && !e.shiftKey && ck) { e.preventDefault(); enterInCk(ck, r); return; }
+    if (e.key === 'Backspace' && r.collapsed) {
+      const block = ck || closestIn(r.startContainer, 'li') || topOf(r.startContainer);
+      if (ck && atStart(ck, r)) { e.preventDefault(); withMarkers(() => { const d = makeBlock('DIV'); if (ck.dataset.ind) d.dataset.ind = ck.dataset.ind; moveKids(ck, d); ck.replaceWith(d); }); changed(); return; }
+      // Backspace в начале строки с отступом — сначала убирает отступ
+      if (block?.dataset.ind && atStart(block, r)) { e.preventDefault(); indent(-1); return; }
     }
-    const t = makeTask('');
-    const nb = { t: 'task', id: t.id };
-    const last = blocks[blocks.length - 1];
-    blocks.splice(last.t === 'text' && !last.text ? blocks.length - 1 : blocks.length, 0, nb);
-    restructure({ block: nb, pos: 0 });
+    if (e.key === 'Tab') { e.preventDefault(); indent(e.shiftKey ? -1 : 1); }
   }
 
-  async function addFiles(list) {
+  /* --- нажатия внутри текста: галочка, дата, файл --- */
+  function hitZone(e) {
+    const x = e.clientX, fig = e.target.closest?.('figure.att');
+    if (fig && ed.contains(fig)) return { fig, del: !!e.target.closest('.f-del') };
+    const ck = e.target.closest?.('.ck');
+    if (!ck || !ed.contains(ck)) return null;
+    const rc = ck.getBoundingClientRect();
+    if (x < rc.left + 30) return { ck, check: true };
+    if (x > rc.right - (ck.dataset.dl ? 118 : 34) && (ck.dataset.dl || ck.classList.contains('cur'))) return { ck, date: true };
+    return null;
+  }
+  function runZone(z) {
+    if (z.fig) {
+      if (z.del) {
+        if (!confirm('Удалить файл из темы?')) return;
+        z.fig.remove();
+        changed();
+      } else openViewer(z.fig.dataset.file);
+      return;
+    }
+    scan();
+    const tid = z.ck.dataset.task;
+    if (z.check) {
+      toggleTask(tid);
+      z.ck.classList.toggle('done', !!byId('tasks', tid)?.done);
+      return;
+    }
     saveNote(true);
-    const lf = lastFocus && blocks[lastFocus.i] ? lastFocus : null;
-    let idx;
-    if (lf && blocks[lf.i].t === 'text') {
-      const b = blocks[lf.i], p = Math.min(lf.pos, b.text.length);
-      blocks.splice(lf.i, 1, { t: 'text', text: b.text.slice(0, p).replace(/\n$/, '') }, { t: 'text', text: b.text.slice(p).replace(/^\n/, '') });
-      idx = lf.i + 1;
-    } else if (lf) idx = lf.i + 1;
-    else idx = blocks.length - 1;
+    const t = byId('tasks', tid);
+    openDatePicker({ title: 'Когда сделать', current: t.date, time: t.remind, withTime: true, onPick: (d, tm) => { patch('tasks', tid, { date: d, remind: tm }); decorate(); } });
+  }
+
+  /* --- вложения --- */
+  async function addFiles(list) {
+    const r = savedRange && ed.contains(savedRange.startContainer) ? savedRange : null;
+    let ref = r ? topOf(r.startContainer) : null;
     let added = 0;
+    // Два фото сразу — средние в ряд, три и больше — маленькие
+    const imgs = list.filter((f) => /^image\//.test(f.type)).length;
+    const size = imgs === 2 ? 'm' : imgs >= 3 ? 's' : '';
     for (const file of list) {
       if (file.size > 25e6) { toast(`«${file.name}» больше 25 МБ`); continue; }
       const p = await prepareFile(file);
       const rec = { id: uid('a'), noteId: note.id, name: p.name, mime: p.mime, size: p.blob.size, driveId: '', createdAt: Date.now(), deleted: false };
       await Store.putFile(rec.id, { buf: await p.blob.arrayBuffer(), type: p.mime });
       upsert('files', rec);
-      blocks.splice(idx++, 0, { t: 'file', id: rec.id });
+      const fig = document.createElement('figure');
+      fig.className = 'att';
+      fig.contentEditable = 'false';
+      fig.dataset.file = rec.id;
+      if (size && p.mime.startsWith('image/')) fig.dataset.size = size;
+      if (ref) ref.after(fig); else ed.append(fig);
+      ref = fig;
       added++;
     }
-    lastFocus = null;
-    restructure(null);
+    if (ref && (!ref.nextElementSibling || ref.nextElementSibling.tagName === 'FIGURE')) { const d = makeBlock('DIV'); d.innerHTML = '<br>'; ref.after(d); }
+    changed();
+    saveNote(true);
     if (added && !state.settings.syncUrl) toast('Файл сохранён на телефоне. Чтобы он был и в облаке — подключи Google-таблицу');
+  }
+
+  /* --- панель «Аа» --- */
+  function panelHtml() {
+    return `
+      <div class="fmt-styles">
+        <button data-tool="H1" class="st-h1">Название</button>
+        <button data-tool="H2" class="st-h2">Заголовок</button>
+        <button data-tool="H3" class="st-h3">Подзаголовок</button>
+        <button data-tool="DIV">Основной текст</button>
+        <button data-tool="PRE" class="st-mono">Моноширинный</button>
+      </div>
+      <div class="fmt-row">
+        <div class="fmt-group"><button data-tool="bold"><b>B</b></button><button data-tool="italic"><i>I</i></button><button data-tool="underline"><u>U</u></button><button data-tool="strikeThrough"><s>S</s></button></div>
+        <div class="fmt-group colors">${HILITES.map(([k, c]) => `<button data-tool="hl" data-c="${c}" aria-label="${k}"><i style="background:${c}"></i></button>`).join('')}<button data-tool="hl" data-c="transparent" aria-label="Без выделения"><i class="none"></i></button></div>
+      </div>
+      <div class="fmt-row">
+        <div class="fmt-group"><button data-tool="UL">${icon('ul')}</button><button data-tool="DASH">${icon('dash')}</button><button data-tool="OL">${icon('ol')}</button></div>
+        <div class="fmt-group"><button data-tool="out">${icon('outdent')}</button><button data-tool="in">${icon('indent')}</button></div>
+        <div class="fmt-group"><button data-tool="BLOCKQUOTE">${icon('quote')}</button></div>
+      </div>`;
+  }
+  function paintPanel() {
+    const p = $('.fmt-panel', ctx.sh);
+    $('.note-tools [data-tool="aa"]', ctx.sh)?.classList.toggle('on', panelOpen);
+    if (!p) return;
+    p.hidden = !panelOpen;
+    if (!panelOpen || !rangeIn()) return;
+    const st = {};
+    for (const c of ['bold', 'italic', 'underline', 'strikeThrough']) { try { st[c] = document.queryCommandState(c); } catch (e) {} }
+    const u = topOf(rangeIn().startContainer);
+    const li = closestIn(rangeIn().startContainer, 'li');
+    const k = li ? listKind(li.parentElement) : u ? kindOf(u) : 'DIV';
+    p.querySelectorAll('[data-tool]').forEach((b) => {
+      const t = b.dataset.tool;
+      b.classList.toggle('on', !!st[t] || t === k);
+    });
+  }
+  function tool(name, btn) {
+    switch (name) {
+      case 'aa': panelOpen = !panelOpen; paintPanel(); return;
+      case 'ck': restoreSel(); setBlocks('CK'); return;
+      case 'photo': pickFiles('image/*', true, addFiles); return;
+      case 'file': pickFiles('', true, addFiles); return;
+      case 'kbd': ed.blur(); panelOpen = false; paintPanel(); return;
+      case 'bold': case 'italic': case 'underline': case 'strikeThrough': inline(name); return;
+      case 'hl': hilite(btn.dataset.c); return;
+      case 'UL': case 'DASH': case 'OL': restoreSel(); toggleList(name); return;
+      case 'in': restoreSel(); indent(1); return;
+      case 'out': restoreSel(); indent(-1); return;
+      default: restoreSel(); setBlocks(name);
+    }
   }
 
   const folderName = () => liveFolder(note.folder)?.name || 'Входящие';
@@ -1296,87 +1743,180 @@ function openNote(id, folder = '') {
     onRight: () => openNoteMenu(),
     refresh: (e) => {
       ctx = e;
-      if ($('.blocks', e.body)) return;
+      if (ed) return;
       e.body.insertAdjacentHTML('beforebegin', `<div class="note-tools">
-        <button data-act="tb-check">${icon('checklist')}<span>Чек-лист</span></button>
-        <button data-act="tb-photo">${icon('photo')}<span>Фото</span></button>
-        <button data-act="tb-file">${icon('clip')}<span>Файл</span></button>
-        <button data-act="tb-kbd" class="kbd" aria-label="Скрыть клавиатуру">${icon('kbd')}</button>
-      </div>`);
-      e.body.innerHTML = `
-        <input class="note-title" placeholder="Тема" value="${esc(note.title)}" enterkeyhint="next">
-        <div class="blocks"></div>
+        <button data-tool="aa" class="aa">Aa</button>
+        <button data-tool="ck">${icon('checklist')}</button>
+        <button data-tool="photo">${icon('photo')}</button>
+        <button data-tool="file">${icon('clip')}</button>
+        <button data-tool="kbd" class="kbd" aria-label="Скрыть клавиатуру">${icon('kbd')}</button>
+      </div><div class="fmt-panel" hidden>${panelHtml()}</div>`);
+      e.body.innerHTML = `<div class="ed" contenteditable="true" spellcheck="true" autocapitalize="sentences"></div>
         <div class="note-foot">${saved ? 'Изменено ' + esc(when(note.updatedAt || Date.now())) : ''}</div>`;
-      renderBlocks();
+      ed = $('.ed', e.body);
+      ed.innerHTML = sanitize(note.html) || '<h1><br></h1>';
+      decorate();
     },
-    onInput: (e) => {
-      const el = e.target;
-      if (e.type === 'change') return;
-      if (el.matches('.b-text')) { blocks[+el.dataset.i].text = el.value; autoGrow(el); }
-      else if (el.matches('.b-ttl')) { pending[blocks[+el.dataset.i].id] = el.value.replace(/\n/g, ' '); autoGrow(el); }
-      else if (!el.matches('.note-title')) return;
-      if (el.dataset.i != null) lastFocus = { i: +el.dataset.i, pos: el.selectionStart };
-      later();
-    },
+    onInput: () => {},
     onClose: () => {
       document.removeEventListener('selectionchange', onSel);
       saveNote();
       const cur = liveById('notes', note.id);
-      if (cur && isEmpty()) upsert('notes', { ...cur, deleted: true });
-    },
-    actions: {
-      'tb-check': () => toggleChecklist(),
-      'tb-photo': () => pickFiles('image/*', true, addFiles),
-      'tb-file': () => pickFiles('', true, addFiles),
-      'tb-kbd': () => document.activeElement?.blur?.(),
-      'b-toggle': (el) => {
-        const b = blocks[+el.dataset.i];
-        toggleTask(b.id);
-        el.closest('.b-task').classList.toggle('done', byId('tasks', b.id)?.done);
-      },
-      'b-date': (el) => {
-        const b = blocks[+el.dataset.i];
-        saveNote(true);
-        const t = byId('tasks', b.id);
-        openDatePicker({ title: 'Когда сделать', current: t.date, time: t.remind, withTime: true, onPick: (d, tm) => { patch('tasks', b.id, { date: d, remind: tm }); renderBlocks(); } });
-      },
-      'f-open': (el) => openViewer(el.dataset.fid),
-      'f-del': (el) => {
-        const i = +el.dataset.i, b = blocks[i];
-        if (!confirm('Удалить файл из темы?')) return;
-        patch('files', b.id, { deleted: true });
-        Store.delFile(b.id);
-        blocks.splice(i, 1);
-        restructure(null);
-      },
+      if (cur && !htmlLines(cur.html).length) upsert('notes', { ...cur, deleted: true });
     },
   });
 
-  // Запоминаем, где стоит курсор: туда вставляются чек-лист и файлы
+  try { document.execCommand('defaultParagraphSeparator', false, 'div'); document.execCommand('styleWithCSS', false, false); } catch (e) {}
+
+  ed.addEventListener('input', () => {
+    // Текст, набранный прямо в корень, оборачиваем в блок
+    if (!ed.firstChild || (ed.childNodes.length === 1 && ed.firstChild.nodeName === 'BR')) { ed.innerHTML = '<div><br></div>'; placeCaret(ed.firstChild); }
+    else if ([...ed.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim())) document.execCommand('formatBlock', false, 'div');
+    changed(true);
+  });
+  ed.addEventListener('keydown', onKey);
+  ed.addEventListener('beforeinput', (e) => {
+    if (e.inputType !== 'insertParagraph') return;
+    const r = rangeIn(), ck = r && closestIn(r.startContainer, '.ck');
+    if (ck) { e.preventDefault(); enterInCk(ck, r); }
+  });
+  ed.addEventListener('paste', (e) => {
+    const text = e.clipboardData?.getData('text/plain');
+    if (text == null) return;
+    e.preventDefault();
+    document.execCommand('insertText', false, text);
+  });
+  let press = null; // нажатие на вложение: тап или удержание
+  ed.addEventListener('touchstart', (e) => {
+    const t = e.touches[0];
+    const z = hitZone({ clientX: t.clientX, target: e.target });
+    if (!z) return;
+    if (z.fig) {
+      // Не гасим касание сразу — иначе по большому фото нельзя прокрутить
+      press = { z, x: t.clientX, y: t.clientY };
+      press.timer = setTimeout(() => { press.fired = true; if (z.fig.classList.contains('is-img')) openImageMenu(z.fig); else openFileMenu(z.fig); }, 480);
+      return;
+    }
+    e.preventDefault();
+    lastTouch = Date.now();
+    runZone(z);
+  }, { passive: false });
+  ed.addEventListener('touchmove', (e) => {
+    if (press && Math.hypot(e.touches[0].clientX - press.x, e.touches[0].clientY - press.y) > 8) { clearTimeout(press.timer); press = null; }
+  }, { passive: true });
+  ed.addEventListener('touchend', (e) => {
+    if (!press) return;
+    clearTimeout(press.timer);
+    e.preventDefault();
+    lastTouch = Date.now();
+    if (!press.fired) runZone(press.z);
+    press = null;
+  });
+  ed.addEventListener('touchcancel', () => { if (press) { clearTimeout(press.timer); press = null; } });
+  ed.addEventListener('click', (e) => {
+    if (Date.now() - lastTouch < 600) return;
+    const z = hitZone(e);
+    if (z) { e.preventDefault(); runZone(z); }
+  });
+  ed.addEventListener('contextmenu', (e) => {
+    const fig = e.target.closest('figure.att');
+    if (!fig || !ed.contains(fig)) return;
+    e.preventDefault();
+    if (Date.now() - lastTouch < 800) return;
+    if (fig.classList.contains('is-img')) openImageMenu(fig); else openFileMenu(fig);
+  });
+
+  /* --- меню вложения (долгое нажатие) --- */
+  // Подряд идущие фото — их можно выстроить в ряд одним нажатием
+  function photoRun(fig) {
+    const out = [fig];
+    for (let p = fig.previousElementSibling; p?.matches('figure.att.is-img'); p = p.previousElementSibling) out.unshift(p);
+    for (let n = fig.nextElementSibling; n?.matches('figure.att.is-img'); n = n.nextElementSibling) out.push(n);
+    return out;
+  }
+  function setSize(figs, size) {
+    for (const f of figs) { if (size === 'l') delete f.dataset.size; else f.dataset.size = size; }
+    changed();
+  }
+  function fileActions(fig) {
+    return {
+      open: () => { closeSheet(); openViewer(fig.dataset.file); },
+      share: () => { const c = fileCache.get(fig.dataset.file); if (c) shareFile(c.file, c.url); else toast('Файл ещё загружается…'); },
+      del: () => { closeSheet(); fig.remove(); changed(); toast('Файл удалён из темы'); },
+    };
+  }
+  const fileButtons = `<div class="card" style="margin-top:16px">
+      <button class="note-row" data-act="open">Открыть</button>
+      <button class="note-row" data-act="share">Поделиться / сохранить</button>
+      <button class="note-row" data-act="del" style="color:var(--danger)">Удалить из темы</button>
+    </div>`;
+  function openImageMenu(fig) {
+    navigator.vibrate?.(12);
+    ed.blur();
+    openSheet({
+      title: 'Изображение',
+      left: 'Закрыть',
+      refresh: (m) => {
+        const cur = fig.dataset.size || 'l', run = photoRun(fig);
+        m.body.innerHTML = `
+          <div class="field-label" style="margin-top:4px">Размер</div>
+          <div class="size-opts">${IMG_SIZES.map(([k, label, hint]) => `
+            <button class="size-opt${cur === k ? ' on' : ''}" data-act="size" data-s="${k}">
+              <span class="size-pic s-${k}"><i></i><i></i><i></i></span><b>${label}</b><small>${hint}</small>
+            </button>`).join('')}</div>
+          ${run.length > 1 ? `<button class="btn secondary small" data-act="size-all">Сделать так же все ${run.length} фото подряд</button>` : ''}
+          <div class="hint">Средние встают по два в ряд, маленькие — по три. Между фото, которые должны стоять в одном ряду, не должно быть текста.</div>
+          ${fileButtons}`;
+      },
+      actions: {
+        size: (el) => { setSize([fig], el.dataset.s); refreshTopSheet(); },
+        'size-all': () => { setSize(photoRun(fig), fig.dataset.size || 'l'); closeSheet(); toast('Размер применён ко всем фото подряд'); },
+        ...fileActions(fig),
+      },
+    });
+  }
+  function openFileMenu(fig) {
+    navigator.vibrate?.(12);
+    ed.blur();
+    const f = byId('files', fig.dataset.file);
+    openSheet({
+      title: f?.name || 'Файл',
+      left: 'Закрыть',
+      refresh: (m) => { m.body.innerHTML = fileButtons; },
+      actions: fileActions(fig),
+    });
+  }
+
+  // Кнопки панели не забирают фокус у текста: действие по touchend/click
+  const tools = [$('.note-tools', ctx.sh), $('.fmt-panel', ctx.sh)];
+  for (const bar of tools) {
+    bar.addEventListener('touchstart', (e) => { if (e.target.closest('[data-tool]')) e.preventDefault(); }, { passive: false });
+    bar.addEventListener('touchend', (e) => {
+      const b = e.target.closest('[data-tool]');
+      if (!b) return;
+      e.preventDefault();
+      lastTouch = Date.now();
+      tool(b.dataset.tool, b);
+    });
+    bar.addEventListener('mousedown', (e) => { if (e.target.closest('[data-tool]')) e.preventDefault(); });
+    bar.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-tool]');
+      if (!b || Date.now() - lastTouch < 600) return;
+      tool(b.dataset.tool, b);
+    });
+  }
+
+  // Запоминаем выделение: туда применяются форматирование и вставка файлов
   const onSel = () => {
-    const a = document.activeElement;
-    if (a?.dataset?.i != null && ctx.sh.contains(a)) lastFocus = { i: +a.dataset.i, pos: a.selectionStart };
+    const r = rangeIn();
+    if (!r) return;
+    savedRange = r.cloneRange();
+    const ck = closestIn(r.startContainer, '.ck');
+    ed.querySelectorAll('.ck.cur').forEach((x) => x !== ck && x.classList.remove('cur'));
+    ck?.classList.add('cur');
+    if (panelOpen) paintPanel();
   };
   document.addEventListener('selectionchange', onSel);
-
-  ctx.sh.addEventListener('keydown', (e) => {
-    const el = e.target;
-    if (el.matches('.note-title') && e.key === 'Enter') { e.preventDefault(); focusAt(blocks[0], 0); return; }
-    if (el.dataset.i == null) return;
-    const i = +el.dataset.i;
-    if (el.matches('.b-ttl') && e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); enterInTask(i, el); return; }
-    if (e.key === 'Backspace' && el.selectionStart === 0 && el.selectionEnd === 0) {
-      if (backspaceAtStart(i, el)) e.preventDefault();
-    }
-  });
-  // Запасной путь для клавиатур, которые не шлют keydown Enter
-  ctx.sh.addEventListener('beforeinput', (e) => {
-    const el = e.target;
-    if (el.matches?.('.b-ttl') && (e.inputType === 'insertLineBreak' || e.inputType === 'insertParagraph')) {
-      e.preventDefault();
-      enterInTask(+el.dataset.i, el);
-    }
-  });
 
   function openNoteMenu() {
     saveNote(true);
@@ -1384,46 +1924,66 @@ function openNote(id, folder = '') {
       title: 'Тема',
       left: 'Закрыть',
       refresh: (m) => {
+        const cur = byId('notes', note.id) || note;
         m.body.innerHTML = `
-          <div class="field-label" style="margin-top:6px">Папка</div>
+          <button class="btn secondary small" data-act="pin" style="margin-top:6px">${icon('pin')} ${cur.pinned ? 'Открепить' : 'Закрепить в папке'}</button>
+          <div class="field-label">Папка</div>
           ${folderChips(note.folder, 'move', 'Входящие')}
           <button class="btn danger small" data-act="del" style="margin-top:24px">Удалить тему</button>
           <div class="hint">Вместе с темой удалятся её дела и файлы.</div>`;
       },
       actions: {
+        pin: () => { const cur = byId('notes', note.id); upsert('notes', { ...cur, pinned: !cur.pinned }); note = byId('notes', note.id); refreshTopSheet(); },
         move: (el) => {
           note.folder = el.dataset.id;
+          note.order = topOrder(note.folder);
           saveNote(true);
+          const cur = byId('notes', note.id);
+          if (cur) upsert('notes', { ...cur, order: note.order });
           for (const t of noteTasks(note)) patch('tasks', t.id, { folder: note.folder });
           $('.back-label', ctx.sh).textContent = folderName();
           refreshTopSheet();
           toast(`Перенесено в «${folderName()}»`);
         },
         del: () => {
-          const tids = noteTasks(note).map((t) => t.id);
-          const fids = blocks.filter((b) => b.t === 'file').map((b) => b.id);
-          for (const t of tids) patch('tasks', t, { deleted: true });
-          for (const f of fids) patch('files', f, { deleted: true });
-          const n = byId('notes', note.id);
-          if (n) upsert('notes', { ...n, deleted: true });
+          closeSheet();
+          ed.innerHTML = '';
+          clearTimeout(timer);
           saved = false;
-          titleEl().value = '';
-          blocks = [{ t: 'text', text: '' }];
+          const undo = deleteNote(note.id);
           closeSheet();
-          closeSheet();
-          toast('Тема удалена', () => {
-            for (const t of tids) patch('tasks', t, { deleted: false });
-            for (const f of fids) patch('files', f, { deleted: false });
-            const c = byId('notes', note.id);
-            if (c) upsert('notes', { ...c, deleted: false });
-            render();
-          });
+          toast('Тема удалена', undo);
         },
       },
     });
   }
 
-  if (!existing) setTimeout(() => titleEl()?.focus(), 60);
+  if (!existing) setTimeout(() => { ed.focus(); placeCaret(ed.firstChild); }, 80);
+}
+
+// Удаляет тему вместе с её делами и файлами; возвращает функцию отмены
+function deleteNote(id) {
+  const n = byId('notes', id);
+  if (!n) return null;
+  const tids = noteTasks(n).map((t) => t.id);
+  const fids = live('files').filter((f) => f.noteId === id).map((f) => f.id);
+  for (const t of tids) patch('tasks', t, { deleted: true });
+  for (const f of fids) patch('files', f, { deleted: true });
+  upsert('notes', { ...n, deleted: true });
+  render();
+  return () => {
+    for (const t of tids) patch('tasks', t, { deleted: false });
+    for (const f of fids) patch('files', f, { deleted: false });
+    const c = byId('notes', id);
+    if (c) upsert('notes', { ...c, html: n.html, deleted: false });
+    render();
+  };
+}
+function togglePinNote(id) {
+  const n = byId('notes', id);
+  if (!n) return;
+  upsert('notes', { ...n, pinned: !n.pinned });
+  render();
 }
 
 /* ---------------- Папка: создание и настройка ---------------- */
@@ -1554,6 +2114,13 @@ function openSettings() {
         <div class="hint">${syncState ? `<span class="sync-dot ${syncState[0]}"></span>${esc(syncState[1])} · ` : ''}последняя синхронизация: ${last}</div>
         <button class="btn small" data-act="sync-now">Синхронизировать сейчас</button>
       </div>
+      <div class="section-title"><span>Жесты</span></div>
+      <div class="card info-card" style="margin:0"><div>
+        <b>Сверху вниз</b> от заголовка — в «Сегодня» с любого экрана.<br>
+        <b>От левого края вправо</b> — назад.<br>
+        <b>Дело</b>: вправо — перенести, влево — закрепить, удержать — переставить.<br>
+        <b>Тема в папке</b>: вправо — закрепить, влево — удалить, удержать — переставить.
+      </div></div>
       <div class="section-title"><span>Данные</span></div>
       <div class="card">
         <button class="note-row" data-act="backup-export" style="color:var(--accent)">Сохранить резервную копию (JSON)</button>
@@ -1621,13 +2188,13 @@ const ACTIONS = {
   'sheet-close': () => closeSheet(),
   'sheet-right': () => ui.sheets[ui.sheets.length - 1]?.onRight?.(),
   'toast-undo': () => { const u = toastUndo; toastUndo = null; $('#toast').classList.remove('show'); u?.(); },
-  tab: (el) => { ui.tab = el.dataset.tab; render(); window.scrollTo(0, 0); },
+  tab: (el) => nav(el.dataset.tab),
   settings: () => openSettings(),
   'sync-now': () => syncNow(true),
   'backup-export': () => exportBackup(),
   'backup-import': () => importBackup(),
   'hide-tip': () => { state.settings.hideInstallTip = true; save(); render(); },
-  'viewer-close': () => { const v = $('.viewer'); if (v) { v.classList.remove('show'); setTimeout(() => v.remove(), 200); } },
+  'viewer-close': () => closeViewer(),
   'viewer-share': (el) => { const c = fileCache.get(el.dataset.fid); if (c) shareFile(c.file, c.url); },
 
   day: (el) => { ui.day = el.dataset.d; render(); },
@@ -1636,8 +2203,8 @@ const ACTIONS = {
   toggle: (el) => toggleTask(el.dataset.id, el.closest('.task')),
   task: (el) => openTask(el.dataset.id),
 
-  folder: (el) => { ui.folder = el.dataset.id; render(); window.scrollTo(0, 0); },
-  'folders-back': () => { ui.folder = ''; render(); },
+  folder: (el) => { ui.qFolder = ''; nav('folders', el.dataset.id); },
+  'folders-back': () => goBack(),
   arrange: () => { ui.arrange = true; render(); },
   'arrange-done': () => { ui.arrange = false; render(); },
   'slot-new': (el) => openFolderEdit(null, Number(el.dataset.slotN)),
@@ -1648,19 +2215,16 @@ const ACTIONS = {
   'cal-month': (el) => { ui.calMonth = shiftMonth(ui.calMonth, Number(el.dataset.n)); render(); },
   'cal-day': (el) => { ui.calDay = el.dataset.d; ui.calMonth = el.dataset.d.slice(0, 7); render(); },
   'cal-today': () => { ui.calDay = ymd(); ui.calMonth = ymd().slice(0, 7); render(); },
-  'open-day': (el) => { ui.day = el.dataset.d; ui.tab = 'today'; render(); window.scrollTo(0, 0); },
+  'open-day': (el) => { ui.day = el.dataset.d; nav('today'); },
 };
 
 document.addEventListener('click', (e) => {
   if (Date.now() - ui.swallowClick < 400) { e.preventDefault(); e.stopPropagation(); return; }
   const tabBtn = e.target.closest('.tab');
   if (tabBtn) {
-    if (ui.tab === tabBtn.dataset.tab && tabBtn.dataset.tab === 'folders') ui.folder = '';
-    if (tabBtn.dataset.tab === 'today' && ui.tab === 'today') ui.day = ymd();
-    ui.tab = tabBtn.dataset.tab;
-    ui.arrange = false;
-    render();
-    window.scrollTo(0, 0);
+    const tab = tabBtn.dataset.tab;
+    if (tab === 'today' && ui.tab === 'today') ui.day = ymd();
+    nav(tab);
     return;
   }
   if (e.target.closest('#fab')) {
@@ -1676,7 +2240,15 @@ document.addEventListener('click', (e) => {
   const fn = sheet?.actions?.[act] || ACTIONS[act];
   if (fn) { e.preventDefault(); fn(el); }
 }, true);
-document.addEventListener('contextmenu', (e) => { if (e.target.closest('.tile, .task, .week')) e.preventDefault(); });
+document.addEventListener('contextmenu', (e) => { if (e.target.closest('.tile, .task, .week, .nrow')) e.preventDefault(); });
+
+// Поиск: обновляем только результаты, поле ввода остаётся с фокусом
+document.addEventListener('input', (e) => {
+  const inp = e.target.closest?.('[data-search]');
+  if (!inp) return;
+  if (inp.dataset.search === 'all') ui.qAll = inp.value; else ui.qFolder = inp.value;
+  renderSearch(inp);
+});
 
 // Строка «+ Добавить дело»: Enter — сохранить и остаться в поле
 function addFromInput(inp, keepFocus) {
@@ -1688,10 +2260,11 @@ function addFromInput(inp, keepFocus) {
   return true;
 }
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') { if ($('.viewer')) ACTIONS['viewer-close'](); else closeSheet(); return; }
+  if (e.key === 'Escape') { goBack(); return; }
   if (e.key !== 'Enter' || e.isComposing) return;
   const inp = e.target.closest?.('[data-add]');
   if (inp) { e.preventDefault(); if (addFromInput(inp, true)) render(); else inp.blur(); return; }
+  if (e.target.matches?.('[data-search]')) { e.preventDefault(); e.target.blur(); return; }
   if (e.target.id === 'f-name') { e.preventDefault(); ui.sheets[ui.sheets.length - 1]?.onRight?.(); }
 });
 document.addEventListener('focusout', (e) => {
@@ -1700,20 +2273,51 @@ document.addEventListener('focusout', (e) => {
 });
 
 /* ---------------- Жесты ----------------
-   • дело вправо → перенос на другой день
-   • неделя влево/вправо → следующая/предыдущая неделя
-   • папка: удержание → режим перестановки, перетаскивание → в любую ячейку */
+   Касания обрабатываем touch-событиями (на iPhone их можно остановить, чтобы
+   не прокручивалась страница), мышь — для компьютера.
+   • от левого края вправо — назад; сверху вниз от заголовка — в «Сегодня»
+   • дело: вправо — перенос, влево — закрепить, удержание — перетаскивание
+   • тема в папке: вправо — закрепить, влево — удалить, удержание — перетаскивание
+   • неделя влево/вправо; папка: удержание → режим перестановки, перетаскивание */
 
 let g = null;
-const SWIPE_AT = 80;
-document.addEventListener('pointerdown', (e) => {
-  if (e.button > 0) return;
-  const base = { x: e.clientX, y: e.clientY, pid: e.pointerId };
-  const task = e.target.closest('.task');
-  if (task) { g = { ...base, type: 'task', row: task, id: task.dataset.id }; return; }
-  const week = e.target.closest('.week');
+const EDGE = 22, SWIPE_AT = 80, PULL_AT = 90, HOLD_MS = 420;
+const pullInd = document.createElement('div');
+pullInd.className = 'pull-ind';
+pullInd.innerHTML = `${svg(P.chevD)}<span>Сегодня</span>`;
+const edgeInd = document.createElement('div');
+edgeInd.className = 'edge-ind';
+edgeInd.innerHTML = svg(P.chevL);
+document.body.append(pullInd, edgeInd);
+
+function gStart(x, y, target) {
+  if (g?.timer) clearTimeout(g.timer);
+  g = null;
+  if ($('.viewer') || target.closest?.('.drag-ghost')) return;
+  const base = { x0: x, y0: y };
+  if (x < EDGE) { g = { ...base, type: 'edge' }; return; }
+  const top = ui.sheets[ui.sheets.length - 1];
+  if (top) {
+    if ($('.sheet-head', top.sh)?.contains(target)) g = { ...base, type: 'pull' };
+    return;
+  }
+  if (target.closest('input, textarea, [contenteditable="true"]')) return;
+  const task = target.closest('.task[data-id]');
+  if (task) {
+    g = { ...base, type: 'task', row: task, id: task.dataset.id };
+    const wrap = task.parentElement;
+    if (wrap.dataset.group && wrap.parentElement.hasAttribute('data-order')) g.timer = setTimeout(() => startListDrag(g, wrap, '.task-wrap', (ids) => reorder('tasks', ids)), HOLD_MS);
+    return;
+  }
+  const nrow = target.closest('.nrow');
+  if (nrow) {
+    g = { ...base, type: 'note', row: $('.note-row', nrow), wrap: nrow, id: nrow.dataset.id };
+    g.timer = setTimeout(() => startListDrag(g, nrow, '.nrow', (ids) => reorder('notes', ids)), HOLD_MS);
+    return;
+  }
+  const week = target.closest('.week');
   if (week) { g = { ...base, type: 'week', el: week }; return; }
-  const tile = e.target.closest('.tile');
+  const tile = target.closest('.tile');
   if (tile) {
     g = { ...base, type: ui.arrange ? 'drag' : 'press', tile, id: tile.dataset.id };
     if (!ui.arrange) {
@@ -1728,84 +2332,96 @@ document.addEventListener('pointerdown', (e) => {
     }
     return;
   }
-  g = null;
-});
+  if (y < 130 && window.scrollY <= 2 && (ui.tab !== 'today' || ui.day !== ymd())) g = { ...base, type: 'pull' };
+}
 
-document.addEventListener('pointermove', (e) => {
-  if (!g || e.pointerId !== g.pid) return;
-  const dx = e.clientX - g.x, dy = e.clientY - g.y;
-  if (g.type === 'press') { if (Math.hypot(dx, dy) > 8) { clearTimeout(g.timer); g = null; } return; }
-  if (g.type === 'drag') { dragMove(e, dx, dy); return; }
-  if (!g.active) {
-    if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { g = null; return; }
-    const horiz = (g.type === 'task' ? dx > 10 : Math.abs(dx) > 10) && Math.abs(dx) > Math.abs(dy) * 1.2;
-    if (!horiz) return;
-    g.active = true;
-    if (g.type === 'task') { g.bg = g.row.previousElementSibling; g.row.classList.remove('anim'); }
-    else g.el.style.transition = 'none';
-    try { (g.row || g.el).setPointerCapture(e.pointerId); } catch (_) {}
-  }
-  if (g.type === 'task') {
-    g.dx = Math.max(0, dx - 10);
-    const shift = g.dx < 110 ? g.dx : 110 + (g.dx - 110) * 0.35;
-    g.row.style.transform = `translateX(${shift}px)`;
-    g.bg.style.opacity = Math.min(1, g.dx / 50);
-    if (!g.armed && g.dx > SWIPE_AT && navigator.vibrate) navigator.vibrate(8);
-    g.armed = g.dx > SWIPE_AT;
-  } else {
+// Возвращает true, если жест наш — тогда прокрутку страницы гасим
+function gMove(x, y) {
+  if (!g) return false;
+  const dx = x - g.x0, dy = y - g.y0;
+  if (g.drag) { g.drag.move(x, y); return true; }
+  if (g.timer && Math.hypot(dx, dy) > 8) { clearTimeout(g.timer); g.timer = null; }
+  if (g.type === 'press') { if (Math.hypot(dx, dy) > 8) g = null; return false; }
+  if (g.type === 'drag') { tileDragMove(x, y, dx, dy); return true; }
+
+  if (g.type === 'edge') {
+    if (!g.active) {
+      if (dx > 12 && dx > Math.abs(dy) * 1.2) g.active = true;
+      else if (Math.abs(dy) > 14 || dx < -6) { g = null; return false; } else return false;
+    }
     g.dx = dx;
+    edgeInd.style.transform = `translate(${Math.min(dx, 120) - 50}px, -50%)`;
+    edgeInd.style.opacity = Math.min(1, dx / SWIPE_AT);
+    edgeInd.classList.toggle('armed', dx > SWIPE_AT);
+    return true;
+  }
+  if (g.type === 'pull') {
+    if (!g.active) {
+      if (dy > 12 && dy > Math.abs(dx) * 1.5) g.active = true;
+      else if (Math.abs(dx) > 14 || dy < -6) { g = null; return false; } else return false;
+    }
+    g.dy = dy;
+    pullInd.style.transform = `translate(-50%, ${Math.min(dy, 140) - 60}px)`;
+    pullInd.style.opacity = Math.min(1, dy / PULL_AT);
+    pullInd.classList.toggle('armed', dy > PULL_AT);
+    return true;
+  }
+  // Горизонтальные свайпы: дело, тема, неделя
+  if (!g.active) {
+    if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { g = null; return false; }
+    if (!(Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) * 1.2)) return false;
+    g.active = true;
+    if (g.row) g.row.classList.remove('anim');
+    else g.el.style.transition = 'none';
+  }
+  g.dx = dx;
+  if (g.row) {
+    const a = Math.abs(dx) - 10;
+    const shift = Math.sign(dx) * (a < 110 ? a : 110 + (a - 110) * 0.35);
+    g.row.style.transform = `translateX(${shift}px)`;
+    const wrap = g.wrap || g.row.parentElement;
+    $('.l', wrap).style.opacity = dx > 0 ? Math.min(1, a / 50) : 0;
+    $('.r', wrap).style.opacity = dx < 0 ? Math.min(1, a / 50) : 0;
+    if (!g.armed && a > SWIPE_AT) navigator.vibrate?.(8);
+    g.armed = a > SWIPE_AT;
+  } else {
     g.el.style.transform = `translateX(${dx}px)`;
     g.el.style.opacity = String(1 - Math.min(0.6, Math.abs(dx) / 300));
   }
-});
-
-function dragMove(e, dx, dy) {
-  if (!g.active) {
-    if (Math.hypot(dx, dy) < 6) return;
-    g.active = true;
-    const r = g.tile.getBoundingClientRect();
-    g.ghost = g.tile.cloneNode(true);
-    g.ghost.classList.add('drag-ghost');
-    g.ghost.style.width = r.width + 'px';
-    document.body.append(g.ghost);
-    g.tile.classList.add('dragging');
-    g.ox = g.x - (r.left + r.width / 2);
-    g.oy = g.y - (r.top + r.height / 2);
-    navigator.vibrate?.(8);
-  }
-  g.ghost.style.left = e.clientX - g.ox + 'px';
-  g.ghost.style.top = e.clientY - g.oy + 'px';
-  const slot = document.elementFromPoint(e.clientX, e.clientY)?.closest('.slot');
-  if (g.over !== slot) { g.over?.classList.remove('over'); slot?.classList.add('over'); g.over = slot; }
-  if (e.clientY < 90) window.scrollBy(0, -10);
-  else if (e.clientY > window.innerHeight - 130) window.scrollBy(0, 10);
+  return true;
 }
 
-function endGesture(e, cancelled) {
-  if (!g || e.pointerId !== g.pid) return;
+function gEnd(cancelled) {
   const s = g;
   g = null;
-  if (s.type === 'press') { clearTimeout(s.timer); if (s.fired) ui.swallowClick = Date.now(); return; }
-  if (s.type === 'drag') {
-    if (!s.active) return;
-    ui.swallowClick = Date.now();
-    s.ghost.remove();
-    s.over?.classList.remove('over');
-    if (!cancelled && s.over) moveFolderToSlot(s.id, Number(s.over.dataset.slot));
-    render();
-    return;
-  }
+  if (!s) return;
+  clearTimeout(s.timer);
+  if (s.drag) { s.drag.end(cancelled); ui.swallowClick = Date.now(); return; }
+  if (s.type === 'press') { if (s.fired) ui.swallowClick = Date.now(); return; }
+  if (s.type === 'drag') { tileDragEnd(s, cancelled); return; }
   if (!s.active) return;
   ui.swallowClick = Date.now();
-  if (s.type === 'task') {
+  if (s.type === 'edge') {
+    edgeInd.style.opacity = 0;
+    if (!cancelled && s.dx > SWIPE_AT) goBack();
+    return;
+  }
+  if (s.type === 'pull') {
+    pullInd.style.opacity = 0;
+    if (!cancelled && s.dy > PULL_AT) goToday();
+    return;
+  }
+  if (s.row) {
+    const wrap = s.wrap || s.row.parentElement;
     s.row.classList.add('anim');
     s.row.style.transform = '';
-    s.bg.style.transition = 'opacity .2s';
-    s.bg.style.opacity = 0;
-    if (!cancelled && s.dx > SWIPE_AT) {
-      const t = byId('tasks', s.id);
-      openDatePicker({ current: t?.date || '', onPick: (d) => moveTasks([s.id], d) });
-    }
+    wrap.querySelectorAll('.l, .r').forEach((b) => { b.style.transition = 'opacity .2s'; b.style.opacity = 0; });
+    if (cancelled || Math.abs(s.dx) - 10 <= SWIPE_AT) return;
+    if (s.type === 'task') {
+      if (s.dx > 0) { const t = byId('tasks', s.id); openDatePicker({ current: t?.date || '', onPick: (d) => moveTasks([s.id], d) }); }
+      else togglePinTask(s.id);
+    } else if (s.dx > 0) togglePinNote(s.id);
+    else { const undo = deleteNote(s.id); toast('Тема удалена', undo); }
     return;
   }
   // Неделя
@@ -1821,8 +2437,93 @@ function endGesture(e, cancelled) {
     s.el.style.opacity = '';
   }
 }
-document.addEventListener('pointerup', (e) => endGesture(e, false));
-document.addEventListener('pointercancel', (e) => endGesture(e, true));
+
+// Перетаскивание строки в списке: соседи раздвигаются, порядок сохраняется при отпускании
+function startListDrag(gs, el, selector, onDrop) {
+  if (g !== gs) return;
+  const items = [...el.parentElement.children].filter((c) => c.matches(selector) && c.dataset.group === el.dataset.group);
+  const rects = items.map((i) => i.getBoundingClientRect());
+  const idx = items.indexOf(el), h = rects[idx].height;
+  let to = idx;
+  items.forEach((i) => i.classList.add('shifting'));
+  el.classList.add('lifted');
+  navigator.vibrate?.(12);
+  gs.drag = {
+    move(x, y) {
+      const dy = y - gs.y0;
+      el.style.transform = `translateY(${dy}px) scale(1.02)`;
+      const mid = rects[idx].top + h / 2 + dy;
+      to = 0;
+      rects.forEach((r, i) => { if (i !== idx && r.top + r.height / 2 < mid) to++; });
+      items.forEach((it, i) => {
+        if (i === idx) return;
+        const shift = idx < to && i > idx && i <= to ? -h : idx > to && i >= to && i < idx ? h : 0;
+        it.style.transform = shift ? `translateY(${shift}px)` : '';
+      });
+    },
+    end(cancel) {
+      items.forEach((i) => { i.style.transform = ''; i.classList.remove('shifting'); });
+      el.classList.remove('lifted');
+      if (!cancel && to !== idx) {
+        const ids = items.map((i) => i.dataset.id);
+        const [m] = ids.splice(idx, 1);
+        ids.splice(to, 0, m);
+        onDrop(ids);
+      }
+      render();
+    },
+  };
+}
+
+function tileDragMove(x, y, dx, dy) {
+  if (!g.active) {
+    if (Math.hypot(dx, dy) < 6) return;
+    g.active = true;
+    const r = g.tile.getBoundingClientRect();
+    g.ghost = g.tile.cloneNode(true);
+    g.ghost.classList.add('drag-ghost');
+    g.ghost.style.width = r.width + 'px';
+    document.body.append(g.ghost);
+    g.tile.classList.add('dragging');
+    g.ox = g.x0 - (r.left + r.width / 2);
+    g.oy = g.y0 - (r.top + r.height / 2);
+    navigator.vibrate?.(8);
+  }
+  g.ghost.style.left = x - g.ox + 'px';
+  g.ghost.style.top = y - g.oy + 'px';
+  const slot = document.elementFromPoint(x, y)?.closest('.slot');
+  if (g.over !== slot) { g.over?.classList.remove('over'); slot?.classList.add('over'); g.over = slot; }
+  if (y < 90) window.scrollBy(0, -10);
+  else if (y > window.innerHeight - 130) window.scrollBy(0, 10);
+}
+function tileDragEnd(s, cancelled) {
+  if (!s.active) return;
+  ui.swallowClick = Date.now();
+  s.ghost.remove();
+  s.over?.classList.remove('over');
+  if (!cancelled && s.over) moveFolderToSlot(s.id, Number(s.over.dataset.slot));
+  render();
+}
+
+let lastTouchAt = 0;
+document.addEventListener('touchstart', (e) => {
+  lastTouchAt = Date.now();
+  if (e.touches.length !== 1) { if (g) gEnd(true); return; }
+  gStart(e.touches[0].clientX, e.touches[0].clientY, e.target);
+}, { passive: true });
+document.addEventListener('touchmove', (e) => {
+  if (!g || e.touches.length !== 1) return;
+  if (gMove(e.touches[0].clientX, e.touches[0].clientY) && e.cancelable) e.preventDefault();
+}, { passive: false });
+document.addEventListener('touchend', () => { lastTouchAt = Date.now(); gEnd(false); });
+document.addEventListener('touchcancel', () => gEnd(true));
+document.addEventListener('mousedown', (e) => {
+  if (e.button || Date.now() - lastTouchAt < 800) return;
+  gStart(e.clientX, e.clientY, e.target);
+  if (g) g.mouse = true;
+});
+document.addEventListener('mousemove', (e) => { if (g?.mouse && e.buttons === 1 && gMove(e.clientX, e.clientY)) e.preventDefault(); });
+document.addEventListener('mouseup', () => { if (g?.mouse) gEnd(false); });
 
 /* ---------------- Жизненный цикл ---------------- */
 
@@ -1843,23 +2544,29 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('online', () => state && scheduleSync(500));
 
-// Данные прошлой версии: заметки с текстом → темы с блоками, дела папок → тема «Дела»
+// Данные прошлых версий: блоки → HTML, дела папок → тема «Дела», порядок тем
 function migrate() {
   state.files ||= [];
-  for (const n of state.notes) {
-    if (!Array.isArray(n.blocks)) { n.blocks = [{ t: 'text', text: n.body || '' }]; delete n.body; n._dirty = true; }
-  }
   for (const t of state.tasks) {
     if (t.noteId === undefined) { t.noteId = ''; t._dirty = true; }
     if (t.remind === undefined) t.remind = '';
+    if (t.pinned === undefined) t.pinned = false;
   }
   for (const f of state.folders) {
     if (f.image === undefined) { f.image = FOLDER_IMAGES[f.name] || ''; f._dirty = true; }
   }
+  for (const n of state.notes) {
+    if (typeof n.html !== 'string') {
+      n.html = Array.isArray(n.blocks) ? blocksToHtml(n.blocks, n.title) : blocksToHtml([{ t: 'text', text: n.body || '' }], n.title);
+      delete n.blocks; delete n.body;
+      n._dirty = true;
+    }
+    if (typeof n.order !== 'number') { n.order = -(n.updatedAt || 0); n._dirty = true; }
+  }
   if ((state.v || 1) < 2) {
     for (const t of live('tasks')) if (!t.noteId && liveFolder(t.folder)) attachTask(t.id, t.folder, '');
-    state.v = 2;
   }
+  state.v = 3;
 }
 
 async function init() {
