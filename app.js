@@ -7,7 +7,7 @@
    через Apps Script (см. google-apps-script/Code.gs). Файлы — в Google Диске.
    ========================================================= */
 
-const APP_VERSION = '0.4.1';
+const APP_VERSION = '0.4.2';
 
 /* ---------------- Утилиты ---------------- */
 
@@ -527,16 +527,20 @@ const hasDirty = () => KINDS.some((k) => state[k].some((e) => e._dirty));
 async function api(action, extra = {}) {
   const s = state.settings;
   if (!s.syncUrl) throw new Error('Сначала подключи Google-таблицу');
-  let r;
-  try {
-    r = await fetch(s.syncUrl.trim(), {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ secret: s.syncSecret, action, ...extra }),
-    });
-  } catch (e) { throw new Error('Нет связи с таблицей'); }
+  // Google иногда отвечает страницей ошибки вместо данных — пробуем ещё пару раз
   let j;
-  try { j = await r.json(); } catch (e) { throw new Error('Скрипт ответил не JSON — проверь адрес и доступ «Все»'); }
+  for (let attempt = 0; attempt < 3 && !j; attempt++) {
+    if (attempt) await new Promise((res) => setTimeout(res, 1500 * attempt));
+    let r;
+    try {
+      r = await fetch(s.syncUrl.trim(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ secret: s.syncSecret, action, ...extra }),
+      });
+    } catch (e) { if (attempt === 2) throw new Error('Нет связи с таблицей'); continue; }
+    try { j = await r.json(); } catch (e) { if (attempt === 2) throw new Error('Скрипт ответил не JSON — проверь адрес и доступ «Все»'); }
+  }
   if (!j.ok) throw new Error(j.error || 'Ошибка скрипта');
   return j.data || {};
 }
