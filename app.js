@@ -179,7 +179,7 @@ const Store = {
 
 /* ---------------- Состояние ---------------- */
 
-const KINDS = ['folders', 'notes', 'tasks', 'files'];
+const KINDS = ['folders', 'notes', 'tasks', 'files', 'shop'];
 let state;
 const ui = {
   tab: 'today', folder: '', hist: [],
@@ -205,7 +205,7 @@ function defaultState() {
     ['Мой Telegram', 'send', 'teal'],
     ['Дом, семья', 'home', 'orange'],
   ].map(([name, ic, color], i) => ({ id: uid('f'), name, icon: ic, color, image: FOLDER_IMAGES[name] || '', order: i, updatedAt: now, deleted: false, _dirty: true }));
-  return { v: 3, folders, notes: [], tasks: [], files: [], settings: defaultSettings() };
+  return { v: 3, folders, notes: [], tasks: [], files: [], shop: [], settings: defaultSettings() };
 }
 
 function save() { Store.set('state', state); }
@@ -483,6 +483,7 @@ const FIELDS = {
   notes: { s: ['id', 'folder', 'title', 'html'], n: ['order', 'createdAt', 'updatedAt'], b: ['pinned', 'deleted'] },
   tasks: { s: ['id', 'title', 'noteId', 'folder', 'date', 'remind', 'note'], n: ['order', 'doneAt', 'createdAt', 'updatedAt'], b: ['done', 'pinned', 'deleted'] },
   files: { s: ['id', 'noteId', 'name', 'mime', 'driveId'], n: ['size', 'createdAt', 'updatedAt'], b: ['deleted'] },
+  shop: { s: ['id', 'name'], n: ['order', 'doneAt', 'createdAt', 'updatedAt'], b: ['done', 'deleted'] },
 };
 
 function norm(k, r) {
@@ -914,6 +915,7 @@ function viewToday() {
     <div><h1>${dayWord(d) || `${parseYmd(d).getDate()} ${MONTHS_GEN[parseYmd(d).getMonth()]}`}</h1><div class="sub">${esc(dateLong(d))}</div></div>
     <div class="top-actions">
       ${d !== today ? `<button class="pill-btn" data-act="day" data-d="${today}">Сегодня</button>` : ''}
+      <button class="icon-btn shop-btn" data-act="shopping" aria-label="Покупки">${svg(FOLDER_ICONS.cart)}${shopLeft() ? `<i class="badge">${shopLeft()}</i>` : ''}</button>
       <button class="icon-btn" data-act="settings" aria-label="Настройки">${icon('gear')}</button>
     </div>
   </div>
@@ -924,13 +926,12 @@ function viewToday() {
     <button class="arrow" data-act="day-shift" data-n="1" aria-label="Следующий день">${icon('chevR')}</button>
   </div>
 
-  ${late.length ? `
-    <div class="section-title late-head"><span>Не сделано раньше · ${late.length}</span><button data-act="late-today">Всё на сегодня</button></div>
-    <div class="tasks">${late.map((t) => taskRow(t, { showDate: true })).join('')}</div>` : ''}
-
   ${total ? `<div class="progress-line"><span>${done.length} из ${total} ${plural(total, ['дела', 'дел', 'дел'])}</span><span class="bar"><i style="width:${Math.round(done.length / total * 100)}%"></i></span></div>`
     : `<div class="section-title"><span>Дела</span></div>`}
   ${taskList(open, done, addRow(d === today ? 'Что сделать сегодня?' : 'Добавить дело', { date: d, key: 'day' }))}
+  ${late.length ? `
+    <div class="section-title late-head"><span>Не сделано раньше · ${late.length}</span><button data-act="late-today">Всё на сегодня</button></div>
+    <div class="tasks">${late.map((t) => taskRow(t, { showDate: true })).join('')}</div>` : ''}
   <div class="hint" style="text-align:center;margin-top:14px">Дело: вправо — перенести, влево — закрепить, удержать — переставить</div>`;
 }
 
@@ -1148,6 +1149,72 @@ function togglePinTask(id) {
   toast(t.pinned ? 'Дело откреплено' : 'Дело закреплено сверху');
 }
 
+/* ---------------- Покупки ---------------- */
+
+const shopLeft = () => live('shop').filter((i) => !i.done).length;
+
+function addShop(text) {
+  const names = text.split('\n').map((l) => l.replace(/^[-•*]\s*/, '').trim()).filter(Boolean);
+  const top = live('shop').reduce((m, i) => Math.min(m, i.order || 0), 0);
+  names.forEach((name, k) => {
+    const now = Date.now();
+    upsert('shop', { id: uid('p'), name, done: false, doneAt: 0, order: top - names.length + k, createdAt: now, deleted: false });
+  });
+  return names.length;
+}
+
+function openShopping() {
+  const paint = (e) => {
+    const items = live('shop');
+    const open = items.filter((i) => !i.done).sort(byOrder);
+    const done = items.filter((i) => i.done).sort((a, b) => b.doneAt - a.doneAt);
+    const row = (i) => `<div class="shop-item${i.done ? ' done' : ''}">
+      <button class="check" data-act="shop-toggle" data-id="${i.id}" aria-label="Куплено">${icon('check')}</button>
+      <input class="shop-name" data-id="${i.id}" value="${esc(i.name)}" enterkeyhint="done" autocomplete="off">
+      <button class="shop-del" data-act="shop-del" data-id="${i.id}" aria-label="Удалить">${icon('x')}</button>
+    </div>`;
+    $('.shop-list', e.body).innerHTML = `
+      ${open.length ? `<div class="tasks">${open.map(row).join('')}</div>` : '<div class="empty" style="padding:18px">Список пуст</div>'}
+      ${done.length ? `<div class="section-title"><span>Куплено · ${done.length}</span><button data-act="shop-clear">Очистить</button></div>
+        <div class="tasks">${done.map(row).join('')}</div>` : ''}`;
+  };
+  const entry = openSheet({
+    title: 'Покупки',
+    left: 'Готово',
+    refresh: (e) => {
+      if (!$('.shop-list', e.body)) {
+        e.body.innerHTML = `<label class="add-row card shop-add"><span class="plus">${icon('plus')}</span><input id="shop-in" placeholder="Что купить?" enterkeyhint="done" autocomplete="off"></label><div class="shop-list"></div>`;
+      }
+      paint(e);
+    },
+    onInput: (e) => {
+      const inp = e.target.closest('.shop-name');
+      if (!inp || e.type !== 'change') return;
+      const name = inp.value.trim();
+      if (name) patch('shop', inp.dataset.id, { name }); else patch('shop', inp.dataset.id, { deleted: true });
+    },
+    onClose: () => render(),
+    actions: {
+      'shop-toggle': (el) => {
+        const i = byId('shop', el.dataset.id);
+        patch('shop', i.id, { done: !i.done, doneAt: i.done ? 0 : Date.now() });
+        navigator.vibrate?.(10);
+        el.closest('.shop-item').classList.toggle('done', !i.done);
+        setTimeout(() => ui.sheets.includes(entry) && paint(entry), 350);
+      },
+      'shop-del': (el) => { patch('shop', el.dataset.id, { deleted: true }); paint(entry); },
+      'shop-clear': () => {
+        const ids = live('shop').filter((i) => i.done).map((i) => i.id);
+        ids.forEach((id) => patch('shop', id, { deleted: true }));
+        paint(entry);
+        toast('Купленное убрано', () => { ids.forEach((id) => patch('shop', id, { deleted: false })); paint(entry); });
+      },
+    },
+  });
+  entry.paint = paint;
+  if (!live('shop').some((i) => !i.done)) setTimeout(() => $('#shop-in', entry.body)?.focus(), 60);
+}
+
 /* ---------------- Быстрое добавление (кнопка +) ---------------- */
 
 function folderChips(sel, act, noneLabel) {
@@ -1253,6 +1320,7 @@ function openTask(id) {
     const custom = t.date && !dates.some(([, d]) => d === t.date);
     const n = liveById('notes', t.noteId);
     $('.opts', e.body).innerHTML = `
+      <div class="pin-line"><button class="pin-toggle${t.pinned ? ' on' : ''}" data-act="pin">${icon('pin')}${t.pinned ? 'Закреплено' : 'Закрепить'}</button></div>
       <div class="field-label">Когда</div>
       <div class="chips">
         ${dates.map(([l, d]) => `<button class="chip${t.date === d ? ' on' : ''}" data-act="date" data-d="${d}">${l}</button>`).join('')}
@@ -1262,7 +1330,6 @@ function openTask(id) {
       <div class="field-label">Папка</div>
       ${folderChips(t.folder, 'folder-pick', 'Без папки')}
       ${n ? `<button class="btn secondary small" data-act="open-topic" style="margin-top:14px">Открыть тему «${esc(noteTitle(n).slice(0, 40))}»</button>` : ''}
-      <button class="btn secondary small" data-act="pin" style="margin-top:10px">${icon('pin')} ${t.pinned ? 'Открепить' : 'Закрепить сверху'}</button>
       <button class="btn${t.done ? ' secondary' : ''}" data-act="done">${t.done ? 'Вернуть в работу' : 'Готово ✓'}</button>
       <button class="btn danger small" data-act="del">Удалить дело</button>`;
   };
@@ -1926,7 +1993,7 @@ function openNote(id, folder = '') {
       refresh: (m) => {
         const cur = byId('notes', note.id) || note;
         m.body.innerHTML = `
-          <button class="btn secondary small" data-act="pin" style="margin-top:6px">${icon('pin')} ${cur.pinned ? 'Открепить' : 'Закрепить в папке'}</button>
+          <div class="pin-line"><button class="pin-toggle${cur.pinned ? ' on' : ''}" data-act="pin">${icon('pin')}${cur.pinned ? 'Закреплено в папке' : 'Закрепить в папке'}</button></div>
           <div class="field-label">Папка</div>
           ${folderChips(note.folder, 'move', 'Входящие')}
           <button class="btn danger small" data-act="del" style="margin-top:24px">Удалить тему</button>
@@ -2190,6 +2257,7 @@ const ACTIONS = {
   'toast-undo': () => { const u = toastUndo; toastUndo = null; $('#toast').classList.remove('show'); u?.(); },
   tab: (el) => nav(el.dataset.tab),
   settings: () => openSettings(),
+  shopping: () => openShopping(),
   'sync-now': () => syncNow(true),
   'backup-export': () => exportBackup(),
   'backup-import': () => importBackup(),
@@ -2266,6 +2334,15 @@ document.addEventListener('keydown', (e) => {
   if (inp) { e.preventDefault(); if (addFromInput(inp, true)) render(); else inp.blur(); return; }
   if (e.target.matches?.('[data-search]')) { e.preventDefault(); e.target.blur(); return; }
   if (e.target.id === 'f-name') { e.preventDefault(); ui.sheets[ui.sheets.length - 1]?.onRight?.(); }
+  // Покупки: Enter — добавить и остаться в поле
+  if (e.target.id === 'shop-in') {
+    e.preventDefault();
+    if (!addShop(e.target.value)) { e.target.blur(); return; }
+    e.target.value = '';
+    const top = ui.sheets[ui.sheets.length - 1];
+    top?.paint?.(top);
+  }
+  if (e.target.matches?.('.shop-name')) { e.preventDefault(); e.target.blur(); }
 });
 document.addEventListener('focusout', (e) => {
   const inp = e.target.closest?.('[data-add]');
@@ -2547,6 +2624,7 @@ window.addEventListener('online', () => state && scheduleSync(500));
 // Данные прошлых версий: блоки → HTML, дела папок → тема «Дела», порядок тем
 function migrate() {
   state.files ||= [];
+  state.shop ||= [];
   for (const t of state.tasks) {
     if (t.noteId === undefined) { t.noteId = ''; t._dirty = true; }
     if (t.remind === undefined) t.remind = '';

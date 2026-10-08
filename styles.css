@@ -664,3 +664,27 @@ svg.i, .i svg { fill: none; stroke: currentColor; stroke-width: 1.9; stroke-line
 .size-pic.s-l i:nth-child(n+2) { display: none; }
 .size-pic.s-m i:nth-child(3) { display: none; }
 .size-pic.s-m, .size-pic.s-s { height: 28px; margin-top: 6px; margin-bottom: 10px; }
+
+/* ---------- v0.4: закрепление, покупки ---------- */
+
+.btn svg { width: 18px; height: 18px; vertical-align: -3px; }
+.pin-line { display: flex; justify-content: flex-end; margin: 10px 0 -4px; }
+.pin-toggle {
+  display: inline-flex; align-items: center; gap: 5px; padding: 6px 12px 6px 10px; border-radius: 16px;
+  font-size: 14px; font-weight: 500; color: var(--muted); background: var(--card); box-shadow: var(--shadow);
+}
+.pin-toggle svg { width: 15px; height: 15px; }
+.pin-toggle.on { color: var(--accent); background: var(--accent-soft); box-shadow: none; }
+
+.shop-btn { position: relative; color: var(--text); }
+.shop-btn .badge { top: -4px; left: auto; right: -5px; }
+.shop-add { margin: 6px 0 4px; }
+.shop-item { position: relative; display: flex; align-items: center; gap: 12px; padding: 4px 6px 4px 14px; min-height: 48px; }
+.shop-item + .shop-item::before { content: ""; position: absolute; top: 0; right: 0; left: 50px; border-top: 1px solid var(--line); }
+.shop-item .check { border-radius: 50%; }
+.shop-item.done .check { background: var(--ok); border-color: var(--ok); }
+.shop-item.done .check svg { opacity: 1; }
+.shop-name { flex: 1; min-width: 0; border: 0; outline: 0; background: none; font-size: 16px; padding: 8px 0; }
+.shop-item.done .shop-name { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--faint); }
+.shop-del { width: 34px; height: 34px; display: grid; place-items: center; color: var(--faint); flex: none; }
+.shop-del svg { width: 16px; height: 16px; }

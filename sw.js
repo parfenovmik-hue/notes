@@ -1,7 +1,7 @@
 // Кэш приложения для работы без интернета.
 // Стратегия: сначала сеть (всегда свежая версия), при отсутствии связи — кэш.
 // При изменении файлов увеличь номер версии.
-const CACHE = 'notespanel-v5';
+const CACHE = 'notespanel-v6';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png', 'icons/folders/most.png', 'icons/folders/vozvraty.png'];
 const NETWORK_TIMEOUT = 3500;
 

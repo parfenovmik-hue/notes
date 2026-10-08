@@ -29,6 +29,11 @@ const SHEETS = {
     cols: [['date', 'Дата'], ['title', 'Дело'], ['folderName', 'Папка'], ['noteTitle', 'Тема'], ['done', 'Сделано'], ['remind', 'Напомнить'], ['note', 'Заметка'], ['pinned', 'Закреплено'],
       ['id', 'id'], ['folder', 'folder'], ['noteId', 'noteId'], ['order', 'order'], ['doneAt', 'doneAt'], ['createdAt', 'createdAt'], ['updatedAt', 'updatedAt'], ['deleted', 'deleted']],
   },
+  shop: {
+    name: 'Покупки',
+    cols: [['name', 'Покупка'], ['done', 'Куплено'],
+      ['id', 'id'], ['order', 'order'], ['doneAt', 'doneAt'], ['createdAt', 'createdAt'], ['updatedAt', 'updatedAt'], ['deleted', 'deleted']],
+  },
   files: {
     name: 'Файлы',
     cols: [['name', 'Файл'], ['noteTitle', 'Тема'], ['size', 'Размер'], ['mime', 'Тип'],

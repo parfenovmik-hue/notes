@@ -1,0 +1,6 @@
+.DS_Store
+.claude/
+# Настоящий секрет Apps Script и привязка clasp — только на этом Mac
+google-apps-script/Secret.gs
+google-apps-script/.clasp.json
+.clasp.json
