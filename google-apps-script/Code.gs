@@ -2,14 +2,12 @@
  * Сервер приложения «Заметки»: синхронизация с Google Таблицей, вложения в Google Диске
  * и push-уведомления на iPhone.
  *
- * 1. Открой таблицу → Расширения → Apps Script, вставь этот код целиком.
- * 2. Придумай длинный секрет и впиши его в SECRET ниже (тот же — в настройках приложения).
- * 3. Вверху выбери функцию setup и нажми «Выполнить» (один раз): выдай доступы —
- *    так включатся напоминания и хранение файлов.
- * 4. Начать развёртывание → Новое развёртывание → Тип: Веб-приложение,
- *    «Выполнять как»: Я, «Кто имеет доступ»: Все. Скопируй URL (…/exec) в приложение.
+ * Код выкладывается через clasp (папка google-apps-script). Секрет лежит в Secret.gs —
+ * этот файл есть только в Apps Script и на Mac, в GitHub он не попадает:
+ *   const SECRET = 'длинный-случайный-секрет';
+ * После первой выкладки один раз запусти в редакторе функцию setup и выдай доступы —
+ * так включатся напоминания и хранение файлов.
  */
-const SECRET = 'ЗАМЕНИ-НА-СВОЙ-ДЛИННЫЙ-СЕКРЕТ';
 
 // Колонки листов. Колонки ищутся по заголовку, так что порядок можно менять,
 // но заголовки не переименовывай. Технические колонки (id и т.п.) — серые.
@@ -56,7 +54,7 @@ function doPost(e) {
   } catch (err) {
     return json({ ok: false, error: 'Некорректный запрос' });
   }
-  if (!SECRET || SECRET.indexOf('ЗАМЕНИ') === 0) return json({ ok: false, error: 'Задай SECRET в скрипте' });
+  if (typeof SECRET === 'undefined' || !SECRET) return json({ ok: false, error: 'Задай SECRET в Secret.gs' });
   if (body.secret !== SECRET) return json({ ok: false, error: 'Неверный секретный ключ' });
   try {
     switch (body.action || 'sync') {
@@ -189,6 +187,7 @@ function download_(body) {
 
 // Запусти один раз вручную: создаёт ключи для push, триггер каждые 5 минут и папку для файлов.
 function setup() {
+  SpreadsheetApp.getActiveSpreadsheet().setSpreadsheetTimeZone(Session.getScriptTimeZone());
   getVapid_();
   ScriptApp.getProjectTriggers().forEach(function (t) {
     if (t.getHandlerFunction() === 'tick') ScriptApp.deleteTrigger(t);
