@@ -7,7 +7,7 @@
    через Apps Script (см. google-apps-script/Code.gs). Файлы — в Google Диске.
    ========================================================= */
 
-const APP_VERSION = '0.3.0';
+const APP_VERSION = '0.4.1';
 
 /* ---------------- Утилиты ---------------- */
 
@@ -559,6 +559,46 @@ function mergeRemote(data) {
     }
   }
 }
+// Одинаковые папки с разных устройств (у каждого свои стандартные) склеиваем в одну.
+// Оставляем папку с меньшим id — все устройства выберут одну и ту же.
+function dedupeFolders() {
+  const groups = new Map();
+  for (const f of live('folders')) {
+    const k = f.name.trim().toLowerCase();
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(f);
+  }
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    group.sort((a, b) => (a.id < b.id ? -1 : 1));
+    const keep = group[0];
+    for (const dup of group.slice(1)) {
+      for (const n of live('notes')) if (n.folder === dup.id) upsert('notes', { ...n, folder: keep.id });
+      for (const t of live('tasks')) if (t.folder === dup.id) upsert('tasks', { ...t, folder: keep.id });
+      upsert('folders', { ...dup, deleted: true });
+    }
+  }
+  // Две темы «Дела» в одной папке — переносим пункты в одну
+  const lists = new Map();
+  for (const n of live('notes').filter((x) => x.title === 'Дела')) {
+    if (!lists.has(n.folder)) lists.set(n.folder, []);
+    lists.get(n.folder).push(n);
+  }
+  for (const group of lists.values()) {
+    if (group.length < 2) continue;
+    group.sort((a, b) => (a.id < b.id ? -1 : 1));
+    const keep = group[0];
+    for (const dup of group.slice(1)) {
+      const body = parseHtml(dup.html);
+      body.querySelector('h1')?.remove();
+      const div = document.createElement('div');
+      div.append(body);
+      upsert('notes', { ...byId('notes', keep.id), html: byId('notes', keep.id).html + div.innerHTML });
+      for (const t of live('tasks')) if (t.noteId === dup.id) upsert('tasks', { ...t, noteId: keep.id });
+      upsert('notes', { ...dup, deleted: true });
+    }
+  }
+}
 function clearDirty(sent) {
   for (const [k, id, upd] of sent) {
     const e = byId(k, id);
@@ -592,6 +632,7 @@ async function syncNow(manual) {
       clearDirty(sent);
       mergeRemote(data);
     }
+    dedupeFolders();
     s.lastSync = Date.now();
     save();
     setSync('ok');
@@ -2239,6 +2280,7 @@ function importBackup() {
       state.v = data.v || (data.version === '0.1.0' ? 1 : 2);
       state.settings = { ...defaultSettings(), ...(data.settings || {}), ...keepSync, lastSync: 1 };
       migrate();
+      dedupeFolders();
       save();
       closeSheet();
       scheduleSync(500);
