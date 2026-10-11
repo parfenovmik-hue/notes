@@ -688,3 +688,15 @@ svg.i, .i svg { fill: none; stroke: currentColor; stroke-width: 1.9; stroke-line
 .shop-item.done .shop-name { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--faint); }
 .shop-del { width: 34px; height: 34px; display: grid; place-items: center; color: var(--faint); flex: none; }
 .shop-del svg { width: 16px; height: 16px; }
+
+/* ---------- Окно дела: кружок выполнения у названия ---------- */
+
+.t-head { display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; border-radius: 12px; background: var(--card); box-shadow: var(--shadow); }
+.t-head .check { border-radius: 50%; margin-top: 2px; }
+.t-head.done .check { background: var(--ok); border-color: var(--ok); }
+.t-head.done .check svg { opacity: 1; }
+.t-head .t-edit { flex: 1; min-width: 0; border: 0; outline: 0; background: none; resize: none; padding: 0; font-size: 18px; font-weight: 600; line-height: 1.35; display: block; }
+.t-head.done .t-edit { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--faint); }
+.t-state { font-size: 13px; color: var(--muted); margin: 6px 4px 0; }
+.t-state:empty { display: none; }
+.t-head .t-edit { overflow: hidden; }

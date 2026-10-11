@@ -7,7 +7,7 @@
    через Apps Script (см. google-apps-script/Code.gs). Файлы — в Google Диске.
    ========================================================= */
 
-const APP_VERSION = '0.4.2';
+const APP_VERSION = '0.4.3';
 
 /* ---------------- Утилиты ---------------- */
 
@@ -1375,17 +1375,22 @@ function openTask(id) {
       <div class="field-label">Папка</div>
       ${folderChips(t.folder, 'folder-pick', 'Без папки')}
       ${n ? `<button class="btn secondary small" data-act="open-topic" style="margin-top:14px">Открыть тему «${esc(noteTitle(n).slice(0, 40))}»</button>` : ''}
-      <button class="btn${t.done ? ' secondary' : ''}" data-act="done">${t.done ? 'Вернуть в работу' : 'Готово ✓'}</button>
       <button class="btn danger small" data-act="del">Удалить дело</button>`;
   };
   const entry = openSheet({
     title: 'Дело',
-    left: 'Закрыть',
+    left: '',
+    right: 'Готово',
+    onRight: () => closeSheet(),
     refresh: (e) => {
       if (!$('.t-edit', e.body)) {
         const t = cur();
         e.body.innerHTML = `
-          <textarea class="textarea t-edit" rows="1" style="min-height:0;font-size:18px;font-weight:600" placeholder="Название">${esc(t.title)}</textarea>
+          <div class="t-head${t.done ? ' done' : ''}">
+            <button class="check" data-act="done" aria-label="Выполнено">${icon('check')}</button>
+            <textarea class="t-edit" rows="1" placeholder="Название">${esc(t.title)}</textarea>
+          </div>
+          <div class="t-state">${t.done ? 'Выполнено — нажми на кружок, чтобы вернуть в работу' : ''}</div>
           <div class="field-label">Заметка к делу</div>
           <textarea class="textarea t-note" rows="2" style="min-height:70px" placeholder="Подробности, ссылки…">${esc(t.note)}</textarea>
           <div class="opts"></div>`;
@@ -1411,7 +1416,14 @@ function openTask(id) {
       'folder-pick': (el) => { flush(); attachTask(id, el.dataset.id, ''); paintOpts(entry); },
       'open-topic': () => { const nid = cur().noteId; flush(); closeSheet(); openNote(nid); },
       pin: () => { patch('tasks', id, { pinned: !cur().pinned }); paintOpts(entry); },
-      done: () => { flush(); toggleTask(id); closeSheet(); },
+      // Кружок у названия: отметить выполненным / вернуть в работу. Окно не закрываем.
+      done: () => {
+        flush();
+        toggleTask(id);
+        const done = !!cur().done;
+        $('.t-head', entry.body).classList.toggle('done', done);
+        $('.t-state', entry.body).textContent = done ? 'Выполнено — нажми на кружок, чтобы вернуть в работу' : '';
+      },
       del: () => { flush(); deleteTask(id); closeSheet(); },
     },
   });
