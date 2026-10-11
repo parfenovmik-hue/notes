@@ -7,7 +7,7 @@
    через Apps Script (см. google-apps-script/Code.gs). Файлы — в Google Диске.
    ========================================================= */
 
-const APP_VERSION = '0.5.0';
+const APP_VERSION = '0.5.1';
 
 /* ---------------- Утилиты ---------------- */
 
@@ -961,13 +961,13 @@ function viewToday() {
 
   return `
   <div class="topbar">
-    <div><h1>${dayWord(d) || `${parseYmd(d).getDate()} ${MONTHS_GEN[parseYmd(d).getMonth()]}`}</h1><div class="sub">${esc(dateLong(d))}</div></div>
+    <div><h1>${dayWord(d) || `${parseYmd(d).getDate()} ${MONTHS_GEN[parseYmd(d).getMonth()]}`}</h1></div>
     <div class="top-actions">
-      ${d !== today ? `<button class="pill-btn" data-act="day" data-d="${today}">Сегодня</button>` : ''}
-      <button class="icon-btn shop-btn" data-act="shopping" aria-label="Покупки">${svg(FOLDER_ICONS.cart)}${shopLeft() ? `<i class="badge">${shopLeft()}</i>` : ''}</button>
+      <button class="pill-btn shop-pill" data-act="shopping">${svg(FOLDER_ICONS.cart)}Покупки${shopLeft() ? `<i>${shopLeft()}</i>` : ''}</button>
       <button class="icon-btn" data-act="settings" aria-label="Настройки">${icon('gear')}</button>
     </div>
   </div>
+  <div class="day-sub">${esc(dateLong(d))}</div>
   ${tip ? `<div class="card info-card"><div>Установи на экран «Домой»: в Safari нажми <b>Поделиться</b> → <b>На экран «Домой»</b>.</div><button data-act="hide-tip" aria-label="Скрыть">×</button></div>` : ''}
   <div class="day-nav">
     <button class="arrow" data-act="day-shift" data-n="-1" aria-label="Предыдущий день">${icon('chevL')}</button>
@@ -980,7 +980,7 @@ function viewToday() {
     ${d === today ? `<button class="counter${late.length ? ' warn' : ''}" data-act="to-late"><b>${late.length}</b><span>с прошлых дней</span></button>` : ''}
     <div class="counter"><b>${done.length}</b><span>сделано</span></div>
   </div>
-  <div class="section-title"><span>${d === today ? 'На сегодня' : esc(dateShort(d))}</span></div>
+  <div class="section-title"><span>${d === today ? 'На сегодня' : esc(dateShort(d))}</span>${d !== today ? `<button data-act="day" data-d="${today}">Вернуться к сегодня</button>` : ''}</div>
   ${taskList(open, done, addRow('Записать дело', { date: d, key: 'day' }))}
   ${late.length ? `
     <div class="section-title late-head" id="late"><span>С предыдущих дней · ${late.length}</span><button data-act="late-today">Всё на сегодня</button></div>
@@ -1016,33 +1016,41 @@ function moveFolderToSlot(id, slot) {
   patch('folders', id, { order: slot });
 }
 
+// Экран папок — картотечный ящик: карточка на проект, сверху цветной язычок
 function foldersGrid() {
   const list = placeFolders();
   const today = ymd();
-  const bySlot = {};
-  list.forEach((f) => (bySlot[f.order] = f));
-  const maxSlot = list.reduce((m, f) => Math.max(m, f.order), -1);
-  let total = Math.max(COLS, Math.ceil((maxSlot + 1) / COLS) * COLS);
-  if (ui.arrange) total = Math.max(total + COLS, 18);
-  const due = {};
-  for (const t of live('tasks')) if (!t.done && t.date && t.date <= today && t.folder) due[t.folder] = (due[t.folder] || 0) + 1;
-  let cells = '';
-  for (let i = 0; i < total; i++) {
-    const f = bySlot[i];
-    if (f) {
-      cells += `<div class="slot" data-slot="${i}"><button class="tile" data-id="${f.id}" data-act="${ui.arrange ? 'folder-edit' : 'folder'}" style="${fc(f)}">
-        <span class="t-ico${f.image ? ' img' : ''}">${folderIcon(f)}</span><span class="t-name">${esc(f.name)}</span>
-        ${due[f.id] && !ui.arrange ? `<i class="t-badge">${due[f.id]}</i>` : ''}</button></div>`;
-    } else {
-      cells += `<div class="slot empty" data-slot="${i}"${ui.arrange ? ` data-act="slot-new" data-slot-n="${i}"` : ''}>${ui.arrange ? '<span class="slot-plus">+</span>' : ''}</div>`;
-    }
+  const st = {};
+  for (const f of list) st[f.id] = { open: 0, due: 0, notes: 0 };
+  for (const t of live('tasks')) {
+    const x = st[t.folder];
+    if (!x || t.done) continue;
+    x.open++;
+    if (t.date && t.date <= today) x.due++;
   }
+  for (const n of live('notes')) if (st[n.folder] && n.title !== 'Дела') st[n.folder].notes++;
+  const cards = list.map((f) => {
+    const x = st[f.id];
+    const meta = [
+      x.open ? `${x.open} ${plural(x.open, ['дело', 'дела', 'дел'])}` : '',
+      x.notes ? `${x.notes} ${plural(x.notes, ['тема', 'темы', 'тем'])}` : '',
+    ].filter(Boolean).join(' · ') || 'пусто';
+    return `<button class="frow" data-id="${f.id}" data-group="f" data-act="folder" style="${fc(f)}">
+      <span class="t-ico${f.image ? ' img' : ''}">${folderIcon(f)}</span>
+      <span class="f-text"><span class="f-name">${esc(f.name)}</span><span class="f-meta">${meta}</span></span>
+      ${x.due ? `<span class="f-due">${x.due} сегодня</span>` : ''}
+      <span class="f-chev">${icon('chevR')}</span>
+    </button>`;
+  }).join('');
   const inbox = inboxCount();
   return `
-  <div class="fgrid${ui.arrange ? ' arranging' : ''}">${cells}</div>
-  ${inbox && !ui.arrange ? `<div class="section-title"><span>Не разложено</span></div>
+  <div class="drawer">
+    ${cards}
+    <button class="frow add" data-act="folder-new">${icon('plus')}Новая папка</button>
+  </div>
+  ${inbox ? `<div class="section-title"><span>Не разложено</span></div>
     <div class="card"><button class="note-row" data-act="tab" data-tab="inbox"><div class="n-main"><div class="n-title">Входящие · ${inbox}</div><div class="n-prev">Темы и дела без папки</div></div></button></div>` : ''}
-  ${!ui.arrange ? '<div class="hint" style="text-align:center;margin-top:18px">Удерживай папку, чтобы переставить</div>' : ''}`;
+  ${list.length > 1 ? '<div class="hint" style="text-align:center;margin-top:18px">Удерживай карточку, чтобы поменять порядок</div>' : ''}`;
 }
 
 function searchAll(q) {
@@ -1061,15 +1069,12 @@ function searchAll(q) {
 function viewFolders() {
   if (ui.folder && liveFolder(ui.folder)) return viewFolder(liveFolder(ui.folder));
   ui.folder = '';
+  ui.arrange = false;
   return `
   <div class="topbar"><div><h1>Папки</h1></div>
-    <div class="top-actions">
-      ${ui.arrange ? '<button class="pill-btn" data-act="arrange-done">Готово</button>'
-        : `<button class="pill-btn" data-act="arrange">Изменить</button><button class="icon-btn" data-act="settings" aria-label="Настройки">${icon('gear')}</button>`}
-    </div></div>
-  ${ui.arrange ? '<div class="hint" style="margin:-6px 4px 12px">Перетащи папку в любую ячейку. Нажми на папку, чтобы переименовать, на «+» — чтобы создать.</div>'
-    : searchBox('all', ui.qAll, 'Поиск по всем папкам')}
-  <div id="fbody">${!ui.arrange && ui.qAll.trim() ? searchAll(ui.qAll) : foldersGrid()}</div>`;
+    <div class="top-actions"><button class="icon-btn" data-act="settings" aria-label="Настройки">${icon('gear')}</button></div></div>
+  ${searchBox('all', ui.qAll, 'Поиск по всем папкам')}
+  <div id="fbody">${ui.qAll.trim() ? searchAll(ui.qAll) : foldersGrid()}</div>`;
 }
 
 function folderBody(f) {
@@ -2343,6 +2348,7 @@ const ACTIONS = {
   arrange: () => { ui.arrange = true; render(); },
   'arrange-done': () => { ui.arrange = false; render(); },
   'slot-new': (el) => openFolderEdit(null, Number(el.dataset.slotN)),
+  'folder-new': () => openFolderEdit(null),
   'folder-edit': (el) => openFolderEdit(el.dataset.id),
   note: (el) => openNote(el.dataset.id),
   'note-new': (el) => openNote(null, el.dataset.folder || ''),
@@ -2375,7 +2381,7 @@ document.addEventListener('click', (e) => {
   const fn = sheet?.actions?.[act] || ACTIONS[act];
   if (fn) { e.preventDefault(); fn(el); }
 }, true);
-document.addEventListener('contextmenu', (e) => { if (e.target.closest('.tile, .task, .week, .nrow')) e.preventDefault(); });
+document.addEventListener('contextmenu', (e) => { if (e.target.closest('.tile, .task, .week, .nrow, .frow')) e.preventDefault(); });
 
 // Поиск: обновляем только результаты, поле ввода остаётся с фокусом
 document.addEventListener('input', (e) => {
@@ -2461,6 +2467,12 @@ function gStart(x, y, target) {
   }
   const week = target.closest('.week');
   if (week) { g = { ...base, type: 'week', el: week }; return; }
+  const frow = target.closest('.frow[data-id]');
+  if (frow) {
+    g = { ...base, type: 'hold' };
+    g.timer = setTimeout(() => startListDrag(g, frow, '.frow', (ids) => reorder('folders', ids)), HOLD_MS);
+    return;
+  }
   const tile = target.closest('.tile');
   if (tile) {
     g = { ...base, type: ui.arrange ? 'drag' : 'press', tile, id: tile.dataset.id };
@@ -2485,7 +2497,7 @@ function gMove(x, y) {
   const dx = x - g.x0, dy = y - g.y0;
   if (g.drag) { g.drag.move(x, y); return true; }
   if (g.timer && Math.hypot(dx, dy) > 8) { clearTimeout(g.timer); g.timer = null; }
-  if (g.type === 'press') { if (Math.hypot(dx, dy) > 8) g = null; return false; }
+  if (g.type === 'press' || g.type === 'hold') { if (Math.hypot(dx, dy) > 8) g = null; return false; }
   if (g.type === 'drag') { tileDragMove(x, y, dx, dy); return true; }
 
   if (g.type === 'edge') {
@@ -2542,6 +2554,7 @@ function gEnd(cancelled) {
   clearTimeout(s.timer);
   if (s.drag) { s.drag.end(cancelled); ui.swallowClick = Date.now(); return; }
   if (s.type === 'press') { if (s.fired) ui.swallowClick = Date.now(); return; }
+  if (s.type === 'hold') return;
   if (s.type === 'drag') { tileDragEnd(s, cancelled); return; }
   if (!s.active) return;
   ui.swallowClick = Date.now();

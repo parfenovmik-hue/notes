@@ -840,3 +840,39 @@ svg.i, .i svg { fill: none; stroke: currentColor; stroke-width: 1.9; stroke-line
   .btn.secondary { color: var(--accent); }
   .btn.danger { color: var(--danger); }
 }
+
+/* ---------- Папки: картотечный ящик ---------- */
+
+.drawer { display: flex; flex-direction: column; gap: 17px; margin-top: 14px; }
+.frow {
+  position: relative; display: flex; align-items: center; gap: 13px; width: 100%; text-align: left;
+  padding: 13px 10px 13px 13px; min-height: 72px; background: var(--card); box-shadow: var(--shadow); border-radius: 14px;
+  -webkit-touch-callout: none; user-select: none; -webkit-user-select: none;
+}
+/* Язычок разделителя: у соседних карточек стоит в разных местах, как в ящике */
+.frow[data-id]::before {
+  content: ''; position: absolute; top: -8px; left: var(--tab, 20px); width: 58px; height: 9px;
+  border-radius: 7px 7px 0 0; background: color-mix(in srgb, var(--fc) 62%, var(--card));
+}
+.frow[data-id]:nth-child(3n+2) { --tab: calc(50% - 29px); }
+.frow[data-id]:nth-child(3n) { --tab: calc(100% - 78px); }
+.frow:active { background: var(--card-2); }
+.frow .t-ico { width: 46px; height: 46px; border-radius: 13px; }
+.frow .t-ico svg { width: 23px; height: 23px; }
+.f-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.f-name { font-family: var(--serif); font-size: 19px; font-weight: 600; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.f-meta { font-size: 13px; color: var(--muted); }
+.f-due { flex: none; font-size: 12px; font-weight: 500; color: var(--accent); background: var(--accent-soft); padding: 3px 9px; border-radius: 10px; white-space: nowrap; }
+.f-chev { flex: none; color: var(--faint); display: grid; }
+.f-chev svg { width: 18px; height: 18px; }
+.frow.add { justify-content: center; gap: 8px; min-height: 52px; background: transparent; box-shadow: none; outline: 0.5px dashed var(--faint); outline-offset: -0.5px; color: var(--accent); font-size: 15px; }
+.frow.add svg { width: 18px; height: 18px; }
+.frow.lifted { box-shadow: 0 10px 26px rgba(31, 27, 22, 0.2); }
+
+/* Кнопка «Покупки» в шапке */
+.shop-pill { display: inline-flex; align-items: center; gap: 7px; height: 38px; padding: 0 14px 0 12px; border-radius: 19px; font-size: 15px; }
+.shop-pill svg { width: 19px; height: 19px; }
+.shop-pill i { font-style: normal; font-size: 12px; font-weight: 600; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: var(--accent); color: #FFF6EE; display: grid; place-items: center; margin-right: -4px; }
+.f-name { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.topbar:has(.shop-pill) { align-items: center; margin-bottom: 2px; }
+.day-sub { color: var(--muted); font-size: 15px; margin: 0 0 14px; }
