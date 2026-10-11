@@ -7,7 +7,7 @@
    через Apps Script (см. google-apps-script/Code.gs). Файлы — в Google Диске.
    ========================================================= */
 
-const APP_VERSION = '0.4.3';
+const APP_VERSION = '0.5.0';
 
 /* ---------------- Утилиты ---------------- */
 
@@ -857,10 +857,13 @@ function taskTag(t) {
 function taskRow(t, opts = {}) {
   const today = ymd();
   const meta = [];
+  const f = liveFolder(t.folder);
+  const n = liveById('notes', t.noteId);
+  const where = [f?.name, n && n.title !== 'Дела' ? noteTitle(n) : ''].filter(Boolean).join(' · ');
   if (t.pinned && !t.done) meta.push(`<span class="pin-mark">${icon('pin')}</span>`);
   if (opts.showDate && t.date) meta.push(`<span class="${!t.done && t.date < today ? 'late' : ''}">${esc(dateShort(t.date))}</span>`);
+  if (where && opts.showTag !== false) meta.push(`<span class="t-where">${esc(where)}</span>`);
   if (t.remind && t.date) meta.push(`<span class="has-note">${icon('bell')} ${esc(t.remind)}</span>`);
-  if (opts.showTag !== false) meta.push(taskTag(t));
   if (t.note.trim()) meta.push(`<span class="has-note">${icon('memo')}</span>`);
   const title = opts.words ? hl(t.title, opts.words) : esc(t.title);
   return `<div class="task-wrap"${opts.group ? ` data-group="${opts.group}" data-id="${t.id}"` : ''}>
@@ -872,6 +875,7 @@ function taskRow(t, opts = {}) {
         <div class="t-title">${title || '<span style="color:var(--muted)">Без названия</span>'}</div>
         <div class="t-meta">${meta.join('')}</div>
       </button>
+      ${f ? `<span class="t-fold${f.image ? ' img' : ''}" style="${fc(f)}" aria-hidden="true">${folderIcon(f)}</span>` : ''}
     </div>
   </div>`;
 }
@@ -971,11 +975,15 @@ function viewToday() {
     <button class="arrow" data-act="day-shift" data-n="1" aria-label="Следующий день">${icon('chevR')}</button>
   </div>
 
-  ${total ? `<div class="progress-line"><span>${done.length} из ${total} ${plural(total, ['дела', 'дел', 'дел'])}</span><span class="bar"><i style="width:${Math.round(done.length / total * 100)}%"></i></span></div>`
-    : `<div class="section-title"><span>Дела</span></div>`}
-  ${taskList(open, done, addRow(d === today ? 'Что сделать сегодня?' : 'Добавить дело', { date: d, key: 'day' }))}
+  <div class="counters">
+    <div class="counter"><b>${open.length}</b><span>${d === today ? 'на сегодня' : 'на этот день'}</span></div>
+    ${d === today ? `<button class="counter${late.length ? ' warn' : ''}" data-act="to-late"><b>${late.length}</b><span>с прошлых дней</span></button>` : ''}
+    <div class="counter"><b>${done.length}</b><span>сделано</span></div>
+  </div>
+  <div class="section-title"><span>${d === today ? 'На сегодня' : esc(dateShort(d))}</span></div>
+  ${taskList(open, done, addRow('Записать дело', { date: d, key: 'day' }))}
   ${late.length ? `
-    <div class="section-title late-head"><span>Не сделано раньше · ${late.length}</span><button data-act="late-today">Всё на сегодня</button></div>
+    <div class="section-title late-head" id="late"><span>С предыдущих дней · ${late.length}</span><button data-act="late-today">Всё на сегодня</button></div>
     <div class="tasks">${late.map((t) => taskRow(t, { showDate: true })).join('')}</div>` : ''}
   <div class="hint" style="text-align:center;margin-top:14px">Дело: вправо — перенести, влево — закрепить, удержать — переставить</div>`;
 }
@@ -2326,6 +2334,7 @@ const ACTIONS = {
   day: (el) => { ui.day = el.dataset.d; render(); },
   'day-shift': (el) => { ui.day = addDays(ui.day, Number(el.dataset.n)); render(); },
   'late-today': () => moveTasks(lateTasks().map((t) => t.id), ymd()),
+  'to-late': () => $('#late')?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
   toggle: (el) => toggleTask(el.dataset.id, el.closest('.task')),
   task: (el) => openTask(el.dataset.id),
 
