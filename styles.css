@@ -876,3 +876,9 @@ svg.i, .i svg { fill: none; stroke: currentColor; stroke-width: 1.9; stroke-line
 .f-name { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .topbar:has(.shop-pill) { align-items: center; margin-bottom: 2px; }
 .day-sub { color: var(--muted); font-size: 15px; margin: 0 0 14px; }
+
+/* Листание дней свайпом */
+.view.day-in-next { animation: day-in-next .22s ease-out; }
+.view.day-in-prev { animation: day-in-prev .22s ease-out; }
+@keyframes day-in-next { from { transform: translateX(40%); opacity: 0; } }
+@keyframes day-in-prev { from { transform: translateX(-40%); opacity: 0; } }

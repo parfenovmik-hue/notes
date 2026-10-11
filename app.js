@@ -7,7 +7,7 @@
    через Apps Script (см. google-apps-script/Code.gs). Файлы — в Google Диске.
    ========================================================= */
 
-const APP_VERSION = '0.5.1';
+const APP_VERSION = '0.5.2';
 
 /* ---------------- Утилиты ---------------- */
 
@@ -1138,7 +1138,16 @@ function render() {
   // Поле поиска не пересоздаём, если в нём курсор: обновляем только результаты
   const active = document.activeElement;
   if (active?.dataset?.search && $('#fbody')) { renderSearch(active); return; }
-  $('#view').innerHTML = (views[ui.tab] || viewToday)();
+  const view = $('#view');
+  view.innerHTML = (views[ui.tab] || viewToday)();
+  if (ui.dayAnim) {
+    const cls = ui.dayAnim > 0 ? 'day-in-next' : 'day-in-prev';
+    ui.dayAnim = 0;
+    view.classList.remove('day-in-next', 'day-in-prev');
+    void view.offsetWidth;
+    view.classList.add(cls);
+    setTimeout(() => view.classList.remove(cls), 260);
+  }
   const n = inboxCount();
   $('#inbox-badge').textContent = n ? String(n) : '';
   if (ui.refocus) {
@@ -2488,7 +2497,10 @@ function gStart(x, y, target) {
     }
     return;
   }
-  if (y < 130 && window.scrollY <= 2 && (ui.tab !== 'today' || ui.day !== ymd())) g = { ...base, type: 'pull' };
+  const canPull = y < 130 && window.scrollY <= 2 && (ui.tab !== 'today' || ui.day !== ymd());
+  // «Сегодня»: свайп по свободному месту листает дни
+  if (ui.tab === 'today') g = { ...base, type: 'day', canPull };
+  else if (canPull) g = { ...base, type: 'pull' };
 }
 
 // Возвращает true, если жест наш — тогда прокрутку страницы гасим
@@ -2500,6 +2512,20 @@ function gMove(x, y) {
   if (g.type === 'press' || g.type === 'hold') { if (Math.hypot(dx, dy) > 8) g = null; return false; }
   if (g.type === 'drag') { tileDragMove(x, y, dx, dy); return true; }
 
+  if (g.type === 'day') {
+    if (!g.active) {
+      if (g.canPull && dy > 12 && dy > Math.abs(dx) * 1.5) g.type = 'pull';
+      else if (Math.abs(dx) > 14 && Math.abs(dx) > Math.abs(dy) * 1.5) { g.active = true; g.el = $('#view'); g.el.style.transition = 'none'; }
+      else if (Math.abs(dy) > 14) { g = null; return false; }
+      else return false;
+    }
+    if (g.type === 'day') {
+      g.dx = dx;
+      g.el.style.transform = `translateX(${dx * 0.6}px)`;
+      g.el.style.opacity = String(1 - Math.min(0.5, Math.abs(dx) / 400));
+      return true;
+    }
+  }
   if (g.type === 'edge') {
     if (!g.active) {
       if (dx > 12 && dx > Math.abs(dy) * 1.2) g.active = true;
@@ -2561,6 +2587,30 @@ function gEnd(cancelled) {
   if (s.type === 'edge') {
     edgeInd.style.opacity = 0;
     if (!cancelled && s.dx > SWIPE_AT) goBack();
+    return;
+  }
+  if (s.type === 'day') {
+    const el = s.el;
+    if (!cancelled && Math.abs(s.dx) > 70) {
+      // слева направо — вчера, справа налево — завтра
+      const dir = s.dx < 0 ? 1 : -1;
+      el.style.transition = 'transform .13s ease, opacity .13s';
+      el.style.transform = `translateX(${-dir * 55}%)`;
+      el.style.opacity = '0';
+      setTimeout(() => {
+        ui.day = addDays(ui.day, dir);
+        ui.dayAnim = dir;
+        el.style.transition = 'none';
+        el.style.transform = '';
+        el.style.opacity = '';
+        render();
+        window.scrollTo(0, 0);
+      }, 125);
+    } else {
+      el.style.transition = 'transform .2s, opacity .2s';
+      el.style.transform = '';
+      el.style.opacity = '';
+    }
     return;
   }
   if (s.type === 'pull') {
