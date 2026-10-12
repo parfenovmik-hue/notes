@@ -7,7 +7,7 @@
    через Apps Script (см. google-apps-script/Code.gs). Файлы — в Google Диске.
    ========================================================= */
 
-const APP_VERSION = '0.5.2';
+const APP_VERSION = '0.5.3';
 
 /* ---------------- Утилиты ---------------- */
 
@@ -967,7 +967,7 @@ function viewToday() {
       <button class="icon-btn" data-act="settings" aria-label="Настройки">${icon('gear')}</button>
     </div>
   </div>
-  <div class="day-sub">${esc(dateLong(d))}</div>
+  <div class="day-sub">${esc(dateLong(d))}${navigator.onLine ? '' : '<span class="offline">нет сети — всё сохраняется на телефоне</span>'}</div>
   ${tip ? `<div class="card info-card"><div>Установи на экран «Домой»: в Safari нажми <b>Поделиться</b> → <b>На экран «Домой»</b>.</div><button data-act="hide-tip" aria-label="Скрыть">×</button></div>` : ''}
   <div class="day-nav">
     <button class="arrow" data-act="day-shift" data-n="-1" aria-label="Предыдущий день">${icon('chevL')}</button>
@@ -2272,7 +2272,11 @@ function openSettings() {
         <button class="note-row" data-act="backup-export" style="color:var(--accent)">Сохранить резервную копию (JSON)</button>
         <button class="note-row" data-act="backup-import" style="color:var(--accent)">Восстановить из копии</button>
       </div>
-      <div class="hint" style="text-align:center;margin:18px 0 0">Заметки ${APP_VERSION} · данные хранятся на телефоне${s.syncUrl ? ', в твоей Google-таблице и на Диске' : ''}</div>`;
+      <div class="hint" style="text-align:center;margin:18px 0 0">Заметки ${APP_VERSION} · данные хранятся на телефоне${s.syncUrl ? ', в твоей Google-таблице и на Диске' : ''}<br><span class="offline-state"></span></div>`;
+      offlineReady().then((ok) => {
+        const el = $('.offline-state', entry.body);
+        if (el) el.textContent = ok ? 'Работа без интернета: готово ✓' : 'Работа без интернета: копия ещё сохраняется — открой приложение ещё раз при включённой сети';
+      });
     },
     onInput: (e) => {
       if (e.type !== 'change') return;
@@ -2292,6 +2296,18 @@ function openSettings() {
       'push-test': () => testPush(),
     },
   });
+}
+
+// Сохранена ли на телефоне копия приложения для запуска без сети
+async function offlineReady() {
+  try {
+    if (!navigator.serviceWorker?.controller) return false;
+    const keys = await caches.keys();
+    const key = keys.find((k) => k.startsWith('notespanel-v'));
+    if (!key) return false;
+    const c = await caches.open(key);
+    return !!(await c.match('app.js')) && !!(await c.match('./'));
+  } catch (e) { return false; }
 }
 
 async function exportFile(text, name, type) {
@@ -2749,7 +2765,8 @@ document.addEventListener('visibilitychange', () => {
     if (state.settings.syncUrl) scheduleSync(800);
   }
 });
-window.addEventListener('online', () => state && scheduleSync(500));
+window.addEventListener('online', () => { if (!state) return; scheduleSync(500); if (!ui.sheets.length) render(); });
+window.addEventListener('offline', () => { if (state && !ui.sheets.length) render(); });
 
 // Данные прошлых версий: блоки → HTML, дела папок → тема «Дела», порядок тем
 function migrate() {

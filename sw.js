@@ -1,9 +1,10 @@
 // Кэш приложения для работы без интернета.
-// Стратегия: сначала сеть (всегда свежая версия), при отсутствии связи — кэш.
-// При изменении файлов увеличь номер версии.
-const CACHE = 'notespanel-v12';
+// Стратегия: всегда открываемся из сохранённой копии — мгновенно и без сети.
+// Новая версия приходит целиком: меняется номер CACHE → браузер ставит новый
+// service worker, тот скачивает все файлы заново и перезагружает приложение.
+// При изменении файлов ОБЯЗАТЕЛЬНО увеличь номер версии.
+const CACHE = 'notespanel-v13';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png', 'icons/folders/most.png', 'icons/folders/vozvraty.png'];
-const NETWORK_TIMEOUT = 3500;
 
 self.addEventListener('install', (e) => {
   // cache: 'reload' — мимо HTTP-кэша браузера, чтобы не сохранить старые файлы
@@ -22,24 +23,23 @@ self.addEventListener('activate', (e) => {
   );
 });
 
-// Свои файлы: пробуем сеть, при ошибке или долгом ответе отдаём кэш. Чужие запросы не трогаем.
+// Свои файлы отдаём из кэша; в сеть идём только за тем, чего в кэше нет. Чужие запросы не трогаем.
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== self.location.origin) return;
   e.respondWith((async () => {
     const cache = await caches.open(CACHE);
-    const network = fetch(e.request, { cache: 'no-cache' }).then((res) => {
+    const cached = await cache.match(e.request, { ignoreSearch: true });
+    if (cached) return cached;
+    try {
+      const res = await fetch(e.request);
       if (res.ok) cache.put(e.request, res.clone());
       return res;
-    });
-    network.catch(() => {});
-    const timeout = new Promise((resolve) => setTimeout(resolve, NETWORK_TIMEOUT));
-    try {
-      const res = await Promise.race([network, timeout]);
-      if (res) return res;
-    } catch (err) { /* нет сети */ }
-    const cached = await cache.match(e.request, { ignoreSearch: true });
-    return cached || network;
+    } catch (err) {
+      // Нет сети и нет в кэше: для переходов отдаём главную страницу
+      if (e.request.mode === 'navigate') return (await cache.match('./')) || Response.error();
+      return Response.error();
+    }
   })());
 });
 
