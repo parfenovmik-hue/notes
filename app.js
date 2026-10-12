@@ -7,7 +7,7 @@
    через Apps Script (см. google-apps-script/Code.gs). Файлы — в Google Диске.
    ========================================================= */
 
-const APP_VERSION = '0.5.3';
+const APP_VERSION = '0.5.4';
 
 /* ---------------- Утилиты ---------------- */
 
@@ -509,7 +509,9 @@ function outRow(k, e) {
 }
 function prefs() {
   const s = state.settings;
-  return { digest: s.digestOn ? s.digest : '', evening: s.eveningOn ? s.evening : '' };
+  let tz = '';
+  try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) {}
+  return { digest: s.digestOn ? s.digest : '', evening: s.eveningOn ? s.evening : '', tz };
 }
 
 let syncBusy = false, syncTimer;

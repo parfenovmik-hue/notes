@@ -65,6 +65,7 @@ function doPost(e) {
       case 'subscribe': return json({ ok: true, data: subscribe_(body.subscription) });
       case 'outbox': return json({ ok: true, data: recentOutbox_() });
       case 'test': return json({ ok: true, data: sendTest_() });
+      case 'diag': return json({ ok: true, data: diag_() });
       default: return json({ ok: false, error: 'Неизвестное действие' });
     }
   } catch (err) {
@@ -80,7 +81,8 @@ function sync_(body) {
   lock.waitLock(20000);
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const tz = ss.getSpreadsheetTimeZone();
+    const tz = Session.getScriptTimeZone();
+    fixDates_(ss);
     const changes = body.changes || {};
     const data = {};
     Object.keys(SHEETS).forEach(function (kind) {
@@ -115,7 +117,7 @@ function table_(ss, def) {
       const col = sh.getRange(2, i + 1, Math.max(sh.getMaxRows() - 1, 1), 1);
       if (TEXT_KEYS.indexOf(c[0]) >= 0) col.setNumberFormat('@');
       if (['createdAt', 'updatedAt', 'doneAt', 'order', 'size'].indexOf(c[0]) >= 0) col.setNumberFormat('0');
-      if (c[0] === 'date') col.setNumberFormat('yyyy-mm-dd');
+      if (c[0] === 'date') col.setNumberFormat('@');
       const h = sh.getRange(1, i + 1).setValue(c[1]).setFontWeight('bold');
       if (TECH.indexOf(c[0]) >= 0) h.setFontColor('#999999');
     }
@@ -138,10 +140,6 @@ function upsert_(t, rows) {
     Object.keys(t.map).forEach(function (k) {
       let v = r[k];
       if (v === undefined || v === null) v = '';
-      if (k === 'date' && typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)) {
-        const p = v.split('-');
-        v = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
-      }
       if (typeof v === 'string' && v.length > 49000) v = v.slice(0, 49000);
       row[t.map[k]] = v;
     });
@@ -165,6 +163,33 @@ function readAll_(t, tz) {
       return o;
     })
     .filter(function (o) { return o.id; });
+}
+
+// Разовая починка: раньше дата записывалась в ячейку как «дата» и читалась в часовом
+// поясе таблицы, который не совпадал с поясом скрипта, — день съезжал назад.
+// Превращаем такие ячейки в текст с исходной датой и помечаем строки изменёнными,
+// чтобы телефоны забрали правильные даты.
+function fixDates_(ss) {
+  if (PROPS.getProperty('datesFixed')) return;
+  const tz = Session.getScriptTimeZone();
+  const t = table_(ss, SHEETS.tasks);
+  const last = t.sh.getLastRow();
+  if (last > 1) {
+    const vals = t.sh.getRange(2, 1, last - 1, t.width).getValues();
+    const dates = [], upd = [];
+    vals.forEach(function (r) {
+      let v = r[t.map.date], u = r[t.map.updatedAt];
+      if (v instanceof Date) { v = Utilities.formatDate(v, tz, 'yyyy-MM-dd'); u = Number(u) + 1; }
+      dates.push([v]);
+      upd.push([u]);
+    });
+    t.sh.getRange(2, t.map.date + 1, last - 1, 1).setNumberFormat('@').setValues(dates);
+    t.sh.getRange(2, t.map.updatedAt + 1, last - 1, 1).setValues(upd);
+  }
+  t.sh.getRange(2, t.map.date + 1, Math.max(t.sh.getMaxRows() - 1, 1), 1).setNumberFormat('@');
+  ss.setSpreadsheetTimeZone(tz);
+  SpreadsheetApp.flush();
+  PROPS.setProperty('datesFixed', String(Date.now()));
 }
 
 /* ---------------- Вложения в Google Диске ---------------- */
@@ -201,7 +226,10 @@ function setup() {
 // Каждые 5 минут: собирает, что пора напомнить, и шлёт push на все устройства.
 function tick() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const tz = ss.getSpreadsheetTimeZone();
+  const prefs0 = JSON.parse(PROPS.getProperty('prefs') || '{}');
+  // Время напоминаний — по часовому поясу телефона (он присылает его при синхронизации)
+  let tz = Session.getScriptTimeZone();
+  if (prefs0.tz) { try { Utilities.formatDate(new Date(), prefs0.tz, 'HH:mm'); tz = prefs0.tz; } catch (err) {} }
   const now = new Date();
   const today = Utilities.formatDate(now, tz, 'yyyy-MM-dd');
   const hm = Utilities.formatDate(now, tz, 'HH:mm');
@@ -328,6 +356,20 @@ function plural_(n, f) {
   if (a > 10 && a < 20) return f[2];
   if (b > 1 && b < 5) return f[1];
   return b === 1 ? f[0] : f[2];
+}
+
+// Диагностика: часовые пояса скрипта и таблицы, триггер напоминаний
+function diag_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const d = new Date(2026, 9, 20);
+  return {
+    scriptTz: Session.getScriptTimeZone(),
+    sheetTz: ss.getSpreadsheetTimeZone(),
+    midnightIso: d.toISOString(),
+    asScript: Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm'),
+    asSheet: Utilities.formatDate(d, ss.getSpreadsheetTimeZone(), 'yyyy-MM-dd HH:mm'),
+    datesFixed: PROPS.getProperty('datesFixed') || '',
+  };
 }
 
 function json(obj) {
