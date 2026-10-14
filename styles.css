@@ -883,3 +883,16 @@ svg.i, .i svg { fill: none; stroke: currentColor; stroke-width: 1.9; stroke-line
 @keyframes day-in-next { from { transform: translateX(40%); opacity: 0; } }
 @keyframes day-in-prev { from { transform: translateX(-40%); opacity: 0; } }
 .offline { display: block; font-size: 12.5px; color: var(--accent); margin-top: 2px; }
+
+/* ---------- Покупки: отдельный экран ---------- */
+
+.shop-add-box { display: flex; gap: 8px; align-items: flex-end; background: var(--card); box-shadow: var(--shadow); border-radius: 14px; padding: 8px 8px 8px 14px; margin-top: 6px; }
+.shop-add-box textarea { flex: 1; min-width: 0; border: 0; outline: 0; background: none; resize: none; font-size: 16px; line-height: 1.4; padding: 7px 0; max-height: 40dvh; overflow-y: auto; }
+.shop-add-box textarea::placeholder { color: var(--muted); }
+.shop-add-box .btn { width: auto; margin: 0; padding: 9px 14px; flex: none; }
+.shop-row .check { border-radius: 50%; }
+.tasks > .shop-wrap:has(.shop-row.done) { box-shadow: none; outline: 0.5px dashed var(--faint); outline-offset: -0.5px; background: transparent; }
+.tasks > .shop-wrap:has(.shop-row.done) .task { background: var(--bg); }
+.shop-row.done .t-title { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--faint); }
+.shop-wrap .task-bg.r { background: var(--danger); }
+.shop-wrap .task-bg.l { display: none; }

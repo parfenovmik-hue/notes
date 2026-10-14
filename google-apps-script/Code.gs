@@ -29,7 +29,7 @@ const SHEETS = {
   },
   shop: {
     name: 'Покупки',
-    cols: [['name', 'Покупка'], ['done', 'Куплено'],
+    cols: [['name', 'Покупка'], ['done', 'Куплено'], ['note', 'Заметка'],
       ['id', 'id'], ['order', 'order'], ['doneAt', 'doneAt'], ['createdAt', 'createdAt'], ['updatedAt', 'updatedAt'], ['deleted', 'deleted']],
   },
   files: {

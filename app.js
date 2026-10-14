@@ -7,7 +7,7 @@
    через Apps Script (см. google-apps-script/Code.gs). Файлы — в Google Диске.
    ========================================================= */
 
-const APP_VERSION = '0.5.4';
+const APP_VERSION = '0.6.0';
 
 /* ---------------- Утилиты ---------------- */
 
@@ -483,7 +483,7 @@ const FIELDS = {
   notes: { s: ['id', 'folder', 'title', 'html'], n: ['order', 'createdAt', 'updatedAt'], b: ['pinned', 'deleted'] },
   tasks: { s: ['id', 'title', 'noteId', 'folder', 'date', 'remind', 'note'], n: ['order', 'doneAt', 'createdAt', 'updatedAt'], b: ['done', 'pinned', 'deleted'] },
   files: { s: ['id', 'noteId', 'name', 'mime', 'driveId'], n: ['size', 'createdAt', 'updatedAt'], b: ['deleted'] },
-  shop: { s: ['id', 'name'], n: ['order', 'doneAt', 'createdAt', 'updatedAt'], b: ['done', 'deleted'] },
+  shop: { s: ['id', 'name', 'note'], n: ['order', 'doneAt', 'createdAt', 'updatedAt'], b: ['done', 'deleted'] },
 };
 
 function norm(k, r) {
@@ -642,7 +642,7 @@ async function syncNow(manual) {
     s.lastSync = Date.now();
     save();
     setSync('ok');
-    if (!ui.sheets.length) render();
+    if (!ui.sheets.length && !typingInView()) render();
     await uploadFiles();
     if (manual) toast('Синхронизировано ✓');
   } catch (e) {
@@ -1134,9 +1134,12 @@ function viewInbox() {
   ${taskList(tasks, [], addRow('Быстрое дело', { key: 'inbox' }))}`;
 }
 
+// Курсор в поле ввода на экране — перерисовка подождёт (иначе пропадёт недописанный текст)
+const typingInView = () => { const a = document.activeElement; return !!a && $('#view').contains(a) && /^(INPUT|TEXTAREA)$/.test(a.tagName) && !a.dataset.search; };
+
 function render() {
   document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === ui.tab));
-  const views = { today: viewToday, folders: viewFolders, calendar: viewCalendar, inbox: viewInbox };
+  const views = { today: viewToday, folders: viewFolders, calendar: viewCalendar, inbox: viewInbox, shop: viewShop };
   // Поле поиска не пересоздаём, если в нём курсор: обновляем только результаты
   const active = document.activeElement;
   if (active?.dataset?.search && $('#fbody')) { renderSearch(active); return; }
@@ -1218,70 +1221,116 @@ function togglePinTask(id) {
   toast(t.pinned ? 'Дело откреплено' : 'Дело закреплено сверху');
 }
 
-/* ---------------- Покупки ---------------- */
+/* ---------------- Покупки ----------------
+   Постоянный список для дома: «Купить» и «Куплено». Отдельный экран, а не всплывающее
+   окно — ничего не теряется при закрытии. Черновик поля хранится в настройках. */
 
 const shopLeft = () => live('shop').filter((i) => !i.done).length;
 
+// Добавляет пункты: каждая строка — отдельная покупка. Новые встают в конец списка.
 function addShop(text) {
-  const names = text.split('\n').map((l) => l.replace(/^[-•*]\s*/, '').trim()).filter(Boolean);
-  const top = live('shop').reduce((m, i) => Math.min(m, i.order || 0), 0);
-  names.forEach((name, k) => {
+  const names = String(text || '').split('\n').map((l) => l.replace(/^[-•*]\s*/, '').trim()).filter(Boolean);
+  let order = live('shop').reduce((m, i) => Math.max(m, i.order || 0), 0);
+  for (const name of names) {
     const now = Date.now();
-    upsert('shop', { id: uid('p'), name, done: false, doneAt: 0, order: top - names.length + k, createdAt: now, deleted: false });
-  });
+    upsert('shop', { id: uid('p'), name, note: '', done: false, doneAt: 0, order: ++order, createdAt: now, deleted: false });
+  }
   return names.length;
 }
 
-function openShopping() {
-  const paint = (e) => {
-    const items = live('shop');
-    const open = items.filter((i) => !i.done).sort(byOrder);
-    const done = items.filter((i) => i.done).sort((a, b) => b.doneAt - a.doneAt);
-    const row = (i) => `<div class="shop-item${i.done ? ' done' : ''}">
-      <button class="check" data-act="shop-toggle" data-id="${i.id}" aria-label="Куплено">${icon('check')}</button>
-      <input class="shop-name" data-id="${i.id}" value="${esc(i.name)}" enterkeyhint="done" autocomplete="off">
-      <button class="shop-del" data-act="shop-del" data-id="${i.id}" aria-label="Удалить">${icon('x')}</button>
-    </div>`;
-    $('.shop-list', e.body).innerHTML = `
-      ${open.length ? `<div class="tasks">${open.map(row).join('')}</div>` : '<div class="empty" style="padding:18px">Список пуст</div>'}
-      ${done.length ? `<div class="section-title"><span>Куплено · ${done.length}</span><button data-act="shop-clear">Очистить</button></div>
-        <div class="tasks">${done.map(row).join('')}</div>` : ''}`;
+function shopRow(i, group) {
+  return `<div class="task-wrap shop-wrap"${group ? ` data-group="${group}"` : ''} data-id="${i.id}">
+    <div class="task-bg l"></div>
+    <div class="task-bg r">Удалить${icon('trash')}</div>
+    <div class="task shop-row${i.done ? ' done' : ''}" data-sid="${i.id}">
+      <button class="check" data-act="shop-toggle" data-id="${i.id}" aria-label="${i.done ? 'Вернуть в «Купить»' : 'Куплено'}">${icon('check')}</button>
+      <button class="t-main" data-act="shop-edit" data-id="${i.id}">
+        <div class="t-title">${esc(i.name)}</div>
+        ${i.note ? `<div class="t-meta"><span class="t-where">${esc(i.note)}</span></div>` : ''}
+      </button>
+    </div>
+  </div>`;
+}
+
+function viewShop() {
+  const items = live('shop');
+  const buy = items.filter((i) => !i.done).sort(byOrder);
+  const got = items.filter((i) => i.done).sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0));
+  return `
+  <button class="back" data-act="back">${icon('chevL')}Назад</button>
+  <div class="topbar"><div><h1>Покупки</h1></div></div>
+  <div class="day-sub">Список для дома — обновляешь, когда нужно</div>
+  <div class="shop-add-box">
+    <textarea id="shop-new" data-keep="shop-new" rows="1" enterkeyhint="enter" autocomplete="off" placeholder="Что купить? Можно сразу несколько — каждое с новой строки">${esc(state.settings.shopDraft || '')}</textarea>
+    <button class="btn small" data-act="shop-add">Добавить</button>
+  </div>
+  <div class="section-title"><span>Купить · ${buy.length}</span></div>
+  ${buy.length ? `<div class="tasks" data-order>${buy.map((i) => shopRow(i, 'buy')).join('')}</div>`
+    : '<div class="empty">Всё куплено. Добавь, что ещё нужно для дома.</div>'}
+  ${got.length ? `<div class="section-title"><span>Куплено · ${got.length}</span><button data-act="shop-clear">Очистить</button></div>
+    <div class="tasks">${got.map((i) => shopRow(i, '')).join('')}</div>` : ''}
+  <div class="hint" style="text-align:center;margin-top:16px">Пункт: нажать — изменить, влево — удалить, удержать — переставить</div>`;
+}
+
+function shopAddFromField() {
+  const ta = $('#shop-new');
+  if (!ta) return;
+  const n = addShop(ta.value);
+  if (!n) { toast('Напиши, что купить'); ta.focus(); return; }
+  state.settings.shopDraft = '';
+  save();
+  render();
+  const fresh = $('#shop-new');
+  fresh.value = '';
+  fresh.focus();
+  toast(n > 1 ? `Добавлено ${n} ${plural(n, ['пункт', 'пункта', 'пунктов'])}` : 'Добавлено');
+}
+
+function toggleShop(id, rowEl) {
+  const i = byId('shop', id);
+  if (!i) return;
+  patch('shop', id, { done: !i.done, doneAt: i.done ? 0 : Date.now() });
+  navigator.vibrate?.(10);
+  rowEl?.classList.toggle('done', !i.done);
+  clearTimeout(toggleShop.timer);
+  toggleShop.timer = setTimeout(render, 450);
+}
+
+function deleteShop(ids, label) {
+  ids.forEach((id) => patch('shop', id, { deleted: true }));
+  render();
+  toast(label, () => { ids.forEach((id) => patch('shop', id, { deleted: false })); render(); });
+}
+
+function openShopItem(id) {
+  if (!byId('shop', id)) return;
+  const flush = () => {
+    const i = byId('shop', id);
+    if (!i || i.deleted) return;
+    const name = $('#si-name', entry.body)?.value.trim();
+    const note = $('#si-note', entry.body)?.value.trim() ?? '';
+    if ((name && name !== i.name) || note !== (i.note || '')) patch('shop', id, { name: name || i.name, note });
   };
   const entry = openSheet({
-    title: 'Покупки',
-    left: 'Готово',
+    title: 'Покупка',
+    left: '',
+    right: 'Готово',
+    onRight: () => closeSheet(),
     refresh: (e) => {
-      if (!$('.shop-list', e.body)) {
-        e.body.innerHTML = `<label class="add-row card shop-add"><span class="plus">${icon('plus')}</span><input id="shop-in" placeholder="Что купить?" enterkeyhint="done" autocomplete="off"></label><div class="shop-list"></div>`;
-      }
-      paint(e);
+      const i = byId('shop', id);
+      e.body.innerHTML = `
+        <input class="input" id="si-name" value="${esc(i.name)}" placeholder="Что купить" style="margin-top:6px;font-size:17px;font-weight:600">
+        <div class="field-label">Заметка</div>
+        <textarea class="textarea" id="si-note" rows="2" style="min-height:70px" placeholder="Размер, цвет, ссылка, где купить…">${esc(i.note || '')}</textarea>
+        <button class="btn secondary small" data-act="si-toggle" style="margin-top:16px">${i.done ? 'Вернуть в «Купить»' : 'Отметить купленным'}</button>
+        <button class="btn danger small" data-act="si-del">Удалить</button>`;
     },
-    onInput: (e) => {
-      const inp = e.target.closest('.shop-name');
-      if (!inp || e.type !== 'change') return;
-      const name = inp.value.trim();
-      if (name) patch('shop', inp.dataset.id, { name }); else patch('shop', inp.dataset.id, { deleted: true });
-    },
-    onClose: () => render(),
+    onClose: flush,
     actions: {
-      'shop-toggle': (el) => {
-        const i = byId('shop', el.dataset.id);
-        patch('shop', i.id, { done: !i.done, doneAt: i.done ? 0 : Date.now() });
-        navigator.vibrate?.(10);
-        el.closest('.shop-item').classList.toggle('done', !i.done);
-        setTimeout(() => ui.sheets.includes(entry) && paint(entry), 350);
-      },
-      'shop-del': (el) => { patch('shop', el.dataset.id, { deleted: true }); paint(entry); },
-      'shop-clear': () => {
-        const ids = live('shop').filter((i) => i.done).map((i) => i.id);
-        ids.forEach((id) => patch('shop', id, { deleted: true }));
-        paint(entry);
-        toast('Купленное убрано', () => { ids.forEach((id) => patch('shop', id, { deleted: false })); paint(entry); });
-      },
+      'si-toggle': () => { flush(); toggleShop(id); closeSheet(); },
+      'si-del': () => { flush(); closeSheet(); deleteShop([id], 'Покупка удалена'); },
     },
   });
-  entry.paint = paint;
-  if (!live('shop').some((i) => !i.done)) setTimeout(() => $('#shop-in', entry.body)?.focus(), 60);
 }
 
 /* ---------------- Быстрое добавление (кнопка +) ---------------- */
@@ -2355,7 +2404,12 @@ const ACTIONS = {
   'toast-undo': () => { const u = toastUndo; toastUndo = null; $('#toast').classList.remove('show'); u?.(); },
   tab: (el) => nav(el.dataset.tab),
   settings: () => openSettings(),
-  shopping: () => openShopping(),
+  shopping: () => nav('shop'),
+  back: () => goBack(),
+  'shop-add': () => shopAddFromField(),
+  'shop-toggle': (el) => toggleShop(el.dataset.id, el.closest('.shop-row')),
+  'shop-edit': (el) => openShopItem(el.dataset.id),
+  'shop-clear': () => deleteShop(live('shop').filter((i) => i.done).map((i) => i.id), 'Купленное убрано'),
   'sync-now': () => syncNow(true),
   'backup-export': () => exportBackup(),
   'backup-import': () => importBackup(),
@@ -2396,6 +2450,7 @@ document.addEventListener('click', (e) => {
     return;
   }
   if (e.target.closest('#fab')) {
+    if (ui.tab === 'shop') { $('#shop-new')?.focus(); return; }
     if (ui.tab === 'folders' && ui.folder) openNote(null, ui.folder);
     else openCapture();
     return;
@@ -2408,7 +2463,21 @@ document.addEventListener('click', (e) => {
   const fn = sheet?.actions?.[act] || ACTIONS[act];
   if (fn) { e.preventDefault(); fn(el); }
 }, true);
-document.addEventListener('contextmenu', (e) => { if (e.target.closest('.tile, .task, .week, .nrow, .frow')) e.preventDefault(); });
+document.addEventListener('contextmenu', (e) => { if (e.target.closest('.tile, .task, .week, .nrow, .frow, .shop-row')) e.preventDefault(); });
+
+document.addEventListener('beforeinput', (e) => {
+  if (e.target.id === 'shop-new' && (e.inputType === 'insertLineBreak' || e.inputType === 'insertParagraph')) {
+    e.preventDefault();
+    shopAddFromField();
+  }
+});
+document.addEventListener('input', (e) => {
+  if (e.target.id !== 'shop-new') return;
+  autoGrow(e.target);
+  state.settings.shopDraft = e.target.value;
+  clearTimeout(e.target._t);
+  e.target._t = setTimeout(save, 400);
+});
 
 // Поиск: обновляем только результаты, поле ввода остаётся с фокусом
 document.addEventListener('input', (e) => {
@@ -2434,15 +2503,7 @@ document.addEventListener('keydown', (e) => {
   if (inp) { e.preventDefault(); if (addFromInput(inp, true)) render(); else inp.blur(); return; }
   if (e.target.matches?.('[data-search]')) { e.preventDefault(); e.target.blur(); return; }
   if (e.target.id === 'f-name') { e.preventDefault(); ui.sheets[ui.sheets.length - 1]?.onRight?.(); }
-  // Покупки: Enter — добавить и остаться в поле
-  if (e.target.id === 'shop-in') {
-    e.preventDefault();
-    if (!addShop(e.target.value)) { e.target.blur(); return; }
-    e.target.value = '';
-    const top = ui.sheets[ui.sheets.length - 1];
-    top?.paint?.(top);
-  }
-  if (e.target.matches?.('.shop-name')) { e.preventDefault(); e.target.blur(); }
+
 });
 document.addEventListener('focusout', (e) => {
   const inp = e.target.closest?.('[data-add]');
@@ -2486,6 +2547,13 @@ function gStart(x, y, target) {
     if (wrap.dataset.group && wrap.parentElement.hasAttribute('data-order')) g.timer = setTimeout(() => startListDrag(g, wrap, '.task-wrap', (ids) => reorder('tasks', ids)), HOLD_MS);
     return;
   }
+  const srow = target.closest('.shop-row');
+  if (srow) {
+    const wrap = srow.parentElement;
+    g = { ...base, type: 'shoprow', row: srow, id: srow.dataset.sid };
+    if (wrap.dataset.group) g.timer = setTimeout(() => startListDrag(g, wrap, '.shop-wrap', (ids) => reorder('shop', ids)), HOLD_MS);
+    return;
+  }
   const nrow = target.closest('.nrow');
   if (nrow) {
     g = { ...base, type: 'note', row: $('.note-row', nrow), wrap: nrow, id: nrow.dataset.id };
@@ -2524,7 +2592,8 @@ function gStart(x, y, target) {
 // Возвращает true, если жест наш — тогда прокрутку страницы гасим
 function gMove(x, y) {
   if (!g) return false;
-  const dx = x - g.x0, dy = y - g.y0;
+  let dx = x - g.x0;
+  const dy = y - g.y0;
   if (g.drag) { g.drag.move(x, y); return true; }
   if (g.timer && Math.hypot(dx, dy) > 8) { clearTimeout(g.timer); g.timer = null; }
   if (g.type === 'press' || g.type === 'hold') { if (Math.hypot(dx, dy) > 8) g = null; return false; }
@@ -2574,8 +2643,9 @@ function gMove(x, y) {
     if (g.row) g.row.classList.remove('anim');
     else g.el.style.transition = 'none';
   }
-  g.dx = dx;
+  g.dx = g.type === 'shoprow' ? Math.min(dx, 0) : dx;
   if (g.row) {
+    dx = g.dx;
     const a = Math.abs(dx) - 10;
     const shift = Math.sign(dx) * (a < 110 ? a : 110 + (a - 110) * 0.35);
     g.row.style.transform = `translateX(${shift}px)`;
@@ -2642,6 +2712,10 @@ function gEnd(cancelled) {
     s.row.style.transform = '';
     wrap.querySelectorAll('.l, .r').forEach((b) => { b.style.transition = 'opacity .2s'; b.style.opacity = 0; });
     if (cancelled || Math.abs(s.dx) - 10 <= SWIPE_AT) return;
+    if (s.type === 'shoprow') {
+      if (s.dx < 0) { const i = byId('shop', s.id); deleteShop([s.id], `«${i?.name || 'Покупка'}» удалена`); }
+      return;
+    }
     if (s.type === 'task') {
       if (s.dx > 0) { const t = byId('tasks', s.id); openDatePicker({ current: t?.date || '', onPick: (d) => moveTasks([s.id], d) }); }
       else togglePinTask(s.id);
@@ -2767,8 +2841,8 @@ document.addEventListener('visibilitychange', () => {
     if (state.settings.syncUrl) scheduleSync(800);
   }
 });
-window.addEventListener('online', () => { if (!state) return; scheduleSync(500); if (!ui.sheets.length) render(); });
-window.addEventListener('offline', () => { if (state && !ui.sheets.length) render(); });
+window.addEventListener('online', () => { if (!state) return; scheduleSync(500); if (!ui.sheets.length && !typingInView()) render(); });
+window.addEventListener('offline', () => { if (state && !ui.sheets.length && !typingInView()) render(); });
 
 // Данные прошлых версий: блоки → HTML, дела папок → тема «Дела», порядок тем
 function migrate() {
