@@ -1004,3 +1004,6 @@ svg.i, .i svg { fill: none; stroke: currentColor; stroke-width: 1.9; stroke-line
 .t-hover .t-grip:active, .lifted .t-grip { cursor: grabbing; }
 .t-grip svg { stroke-width: 2.6; }
 .t-fold.empty { visibility: hidden; }
+/* Обе кнопки списков — одинаковой ширины */
+.mini-lists { align-items: stretch; }
+.mini-pill { justify-content: flex-start; }

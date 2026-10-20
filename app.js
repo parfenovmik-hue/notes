@@ -7,7 +7,7 @@
    через Apps Script (см. google-apps-script/Code.gs). Файлы — в Google Диске.
    ========================================================= */
 
-const APP_VERSION = '0.8.1';
+const APP_VERSION = '0.8.2';
 
 /* ---------------- Утилиты ---------------- */
 
@@ -972,8 +972,8 @@ function viewToday() {
     <div><h1>${dayWord(d) || `${parseYmd(d).getDate()} ${MONTHS_GEN[parseYmd(d).getMonth()]}`}</h1></div>
     <div class="top-actions">
       <div class="mini-lists">
-        <button class="mini-pill" data-act="shopping">${svg(FOLDER_ICONS.cart)}Покупки${shopLeft() ? `<i>${shopLeft()}</i>` : ''}</button>
-        <button class="mini-pill" data-act="wants">${icon('star')}Мне надо${wantsLeft() ? `<i>${wantsLeft()}</i>` : ''}</button>
+        <button class="mini-pill" data-act="shopping">${svg(FOLDER_ICONS.cart)}Покупки</button>
+        <button class="mini-pill" data-act="wants">${icon('star')}Мне надо</button>
       </div>
       <button class="icon-btn" data-act="settings" aria-label="Настройки">${icon('gear')}</button>
     </div>
@@ -1197,8 +1197,8 @@ function renderSidebar() {
     ${item('calendar', icon('cal'), 'Календарь', 0, ui.tab === 'calendar')}
     ${item('inbox', icon('inbox'), 'Входящие', inboxCount(), ui.tab === 'inbox')}
     <div class="sb-sep"></div>
-    ${item('shop', svg(FOLDER_ICONS.cart), 'Покупки', shopLeft(), ui.tab === 'shop')}
-    ${item('wants', icon('star'), 'Мне надо', wantsLeft(), ui.tab === 'wants')}
+    ${item('shop', svg(FOLDER_ICONS.cart), 'Покупки', 0, ui.tab === 'shop')}
+    ${item('wants', icon('star'), 'Мне надо', 0, ui.tab === 'wants')}
     <div class="sb-sep"></div>
     ${item('folders', svg(FOLDER_ICONS.folder), 'Папки', 0, ui.tab === 'folders' && !ui.folder)}
     <div class="sb-folders">${fold}</div>
