@@ -7,7 +7,7 @@
    через Apps Script (см. google-apps-script/Code.gs). Файлы — в Google Диске.
    ========================================================= */
 
-const APP_VERSION = '0.7.0';
+const APP_VERSION = '0.7.1';
 
 /* ---------------- Утилиты ---------------- */
 
@@ -969,14 +969,14 @@ function viewToday() {
   <div class="topbar">
     <div><h1>${dayWord(d) || `${parseYmd(d).getDate()} ${MONTHS_GEN[parseYmd(d).getMonth()]}`}</h1></div>
     <div class="top-actions">
+      <div class="mini-lists">
+        <button class="mini-pill" data-act="shopping">${svg(FOLDER_ICONS.cart)}Покупки${shopLeft() ? `<i>${shopLeft()}</i>` : ''}</button>
+        <button class="mini-pill" data-act="wants">${icon('star')}Мне надо${wantsLeft() ? `<i>${wantsLeft()}</i>` : ''}</button>
+      </div>
       <button class="icon-btn" data-act="settings" aria-label="Настройки">${icon('gear')}</button>
     </div>
   </div>
   <div class="day-sub">${esc(dateLong(d))}${navigator.onLine ? '' : '<span class="offline">нет сети — всё сохраняется на телефоне</span>'}</div>
-  <div class="list-pills">
-    <button class="pill-btn shop-pill" data-act="shopping">${svg(FOLDER_ICONS.cart)}Покупки${shopLeft() ? `<i>${shopLeft()}</i>` : ''}</button>
-    <button class="pill-btn shop-pill" data-act="wants">${icon('star')}Мне надо${wantsLeft() ? `<i>${wantsLeft()}</i>` : ''}</button>
-  </div>
   ${tip ? `<div class="card info-card"><div>Установи на экран «Домой»: в Safari нажми <b>Поделиться</b> → <b>На экран «Домой»</b>.</div><button data-act="hide-tip" aria-label="Скрыть">×</button></div>` : ''}
   <div class="day-nav">
     <button class="arrow" data-act="day-shift" data-n="-1" aria-label="Предыдущий день">${icon('chevL')}</button>
