@@ -32,6 +32,11 @@ const SHEETS = {
     cols: [['name', 'Покупка'], ['done', 'Куплено'], ['note', 'Заметка'],
       ['id', 'id'], ['order', 'order'], ['doneAt', 'doneAt'], ['createdAt', 'createdAt'], ['updatedAt', 'updatedAt'], ['deleted', 'deleted']],
   },
+  wants: {
+    name: 'Мне надо',
+    cols: [['name', 'Что'], ['type', 'Тип'], ['price', 'Стоимость'], ['saved', 'Отложено'], ['done', 'Сделано'], ['note', 'Заметка'],
+      ['id', 'id'], ['order', 'order'], ['doneAt', 'doneAt'], ['createdAt', 'createdAt'], ['updatedAt', 'updatedAt'], ['deleted', 'deleted']],
+  },
   files: {
     name: 'Файлы',
     cols: [['name', 'Файл'], ['noteTitle', 'Тема'], ['size', 'Размер'], ['mime', 'Тип'],
@@ -39,7 +44,7 @@ const SHEETS = {
   },
 };
 const TECH = ['id', 'folder', 'noteId', 'html', 'blocks', 'pinned', 'order', 'doneAt', 'createdAt', 'updatedAt', 'deleted', 'driveId'];
-const TEXT_KEYS = ['id', 'name', 'icon', 'color', 'image', 'title', 'text', 'folder', 'folderName', 'noteId', 'noteTitle', 'note', 'html', 'blocks', 'remind', 'mime', 'driveId'];
+const TEXT_KEYS = ['id', 'name', 'icon', 'color', 'image', 'title', 'text', 'folder', 'folderName', 'noteId', 'noteTitle', 'note', 'html', 'blocks', 'remind', 'mime', 'driveId', 'type'];
 const PROPS = PropertiesService.getScriptProperties();
 const FILES_FOLDER = 'Заметки — вложения';
 

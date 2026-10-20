@@ -896,3 +896,29 @@ svg.i, .i svg { fill: none; stroke: currentColor; stroke-width: 1.9; stroke-line
 .shop-row.done .t-title { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--faint); }
 .shop-wrap .task-bg.r { background: var(--danger); }
 .shop-wrap .task-bg.l { display: none; }
+
+/* ---------- Списки на главном: «Покупки» и «Мне надо» ---------- */
+
+.list-pills { display: flex; gap: 8px; margin: -4px 0 14px; }
+.list-pills .shop-pill { flex: 1; justify-content: center; }
+
+/* ---------- Мне надо ---------- */
+
+.want-sum { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; background: var(--card); box-shadow: var(--shadow); border-radius: 14px; padding: 12px 14px 13px; margin: 2px 0 10px; }
+.want-sum b { font-family: var(--serif); font-size: 21px; font-weight: 600; display: block; line-height: 1.15; }
+.want-sum span { font-size: 12px; color: var(--muted); }
+.want-sum .want-bar { grid-column: 1 / -1; margin-top: 6px; }
+.want-bar { height: 4px; border-radius: 2px; background: var(--card-2); overflow: hidden; margin-top: 7px; }
+.want-bar.big { height: 6px; border-radius: 3px; }
+.want-bar i { display: block; height: 100%; background: var(--accent); border-radius: inherit; transition: width .3s; }
+.t-where.ok { color: var(--c-green); font-weight: 500; }
+.want-row .check { border-radius: 50%; }
+.want-type { color: var(--muted); background: var(--card-2); }
+.want-row.done .t-title { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--faint); }
+.want-row.done .want-type { opacity: .5; }
+.money-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+.money-grid label span { display: block; font-size: 13px; color: var(--muted); margin: 0 4px 6px; }
+.add-money { display: flex; gap: 8px; margin-top: 10px; }
+.add-money .input { flex: 1; min-width: 0; }
+.add-money .btn { width: auto; margin: 0; flex: none; padding: 10px 14px; }
+.seg button svg { width: 15px; height: 15px; vertical-align: -2px; }

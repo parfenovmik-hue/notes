@@ -7,7 +7,7 @@
    через Apps Script (см. google-apps-script/Code.gs). Файлы — в Google Диске.
    ========================================================= */
 
-const APP_VERSION = '0.6.0';
+const APP_VERSION = '0.7.0';
 
 /* ---------------- Утилиты ---------------- */
 
@@ -108,6 +108,9 @@ const P = {
   outdent: '<path d="M3.5 5.5h17M11 10h9.5M11 14h9.5M3.5 18.5h17M7 9.5 4 12l3 2.5"/>',
   indent: '<path d="M3.5 5.5h17M11 10h9.5M11 14h9.5M3.5 18.5h17M4 9.5 7 12l-3 2.5"/>',
   quote: '<path d="M5 5v14"/><path d="M9.5 8H20M9.5 12H20M9.5 16h7"/>',
+  star: '<path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"/>',
+  flag: '<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>',
+  bag: '<path d="M5 8h14l-1.2 12H6.2z"/><path d="M9 8V6.5a3 3 0 0 1 6 0V8"/>',
 };
 const FOLDER_ICONS = {
   folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
@@ -179,7 +182,7 @@ const Store = {
 
 /* ---------------- Состояние ---------------- */
 
-const KINDS = ['folders', 'notes', 'tasks', 'files', 'shop'];
+const KINDS = ['folders', 'notes', 'tasks', 'files', 'shop', 'wants'];
 let state;
 const ui = {
   tab: 'today', folder: '', hist: [],
@@ -205,7 +208,7 @@ function defaultState() {
     ['Мой Telegram', 'send', 'teal'],
     ['Дом, семья', 'home', 'orange'],
   ].map(([name, ic, color], i) => ({ id: uid('f'), name, icon: ic, color, image: FOLDER_IMAGES[name] || '', order: i, updatedAt: now, deleted: false, _dirty: true }));
-  return { v: 3, folders, notes: [], tasks: [], files: [], shop: [], settings: defaultSettings() };
+  return { v: 3, folders, notes: [], tasks: [], files: [], shop: [], wants: [], settings: defaultSettings() };
 }
 
 function save() { Store.set('state', state); }
@@ -484,6 +487,7 @@ const FIELDS = {
   tasks: { s: ['id', 'title', 'noteId', 'folder', 'date', 'remind', 'note'], n: ['order', 'doneAt', 'createdAt', 'updatedAt'], b: ['done', 'pinned', 'deleted'] },
   files: { s: ['id', 'noteId', 'name', 'mime', 'driveId'], n: ['size', 'createdAt', 'updatedAt'], b: ['deleted'] },
   shop: { s: ['id', 'name', 'note'], n: ['order', 'doneAt', 'createdAt', 'updatedAt'], b: ['done', 'deleted'] },
+  wants: { s: ['id', 'name', 'note', 'type'], n: ['price', 'saved', 'order', 'doneAt', 'createdAt', 'updatedAt'], b: ['done', 'deleted'] },
 };
 
 function norm(k, r) {
@@ -965,11 +969,14 @@ function viewToday() {
   <div class="topbar">
     <div><h1>${dayWord(d) || `${parseYmd(d).getDate()} ${MONTHS_GEN[parseYmd(d).getMonth()]}`}</h1></div>
     <div class="top-actions">
-      <button class="pill-btn shop-pill" data-act="shopping">${svg(FOLDER_ICONS.cart)}Покупки${shopLeft() ? `<i>${shopLeft()}</i>` : ''}</button>
       <button class="icon-btn" data-act="settings" aria-label="Настройки">${icon('gear')}</button>
     </div>
   </div>
   <div class="day-sub">${esc(dateLong(d))}${navigator.onLine ? '' : '<span class="offline">нет сети — всё сохраняется на телефоне</span>'}</div>
+  <div class="list-pills">
+    <button class="pill-btn shop-pill" data-act="shopping">${svg(FOLDER_ICONS.cart)}Покупки${shopLeft() ? `<i>${shopLeft()}</i>` : ''}</button>
+    <button class="pill-btn shop-pill" data-act="wants">${icon('star')}Мне надо${wantsLeft() ? `<i>${wantsLeft()}</i>` : ''}</button>
+  </div>
   ${tip ? `<div class="card info-card"><div>Установи на экран «Домой»: в Safari нажми <b>Поделиться</b> → <b>На экран «Домой»</b>.</div><button data-act="hide-tip" aria-label="Скрыть">×</button></div>` : ''}
   <div class="day-nav">
     <button class="arrow" data-act="day-shift" data-n="-1" aria-label="Предыдущий день">${icon('chevL')}</button>
@@ -1139,7 +1146,7 @@ const typingInView = () => { const a = document.activeElement; return !!a && $('
 
 function render() {
   document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === ui.tab));
-  const views = { today: viewToday, folders: viewFolders, calendar: viewCalendar, inbox: viewInbox, shop: viewShop };
+  const views = { today: viewToday, folders: viewFolders, calendar: viewCalendar, inbox: viewInbox, shop: viewShop, wants: viewWants };
   // Поле поиска не пересоздаём, если в нём курсор: обновляем только результаты
   const active = document.activeElement;
   if (active?.dataset?.search && $('#fbody')) { renderSearch(active); return; }
@@ -1261,9 +1268,10 @@ function viewShop() {
   <div class="topbar"><div><h1>Покупки</h1></div></div>
   <div class="day-sub">Список для дома — обновляешь, когда нужно</div>
   <div class="shop-add-box">
-    <textarea id="shop-new" data-keep="shop-new" rows="1" enterkeyhint="enter" autocomplete="off" placeholder="Что купить? Можно сразу несколько — каждое с новой строки">${esc(state.settings.shopDraft || '')}</textarea>
+    <textarea id="shop-new" data-keep="shop-new" rows="1" enterkeyhint="enter" autocomplete="off" placeholder="Что купить?">${esc(state.settings.shopDraft || '')}</textarea>
     <button class="btn small" data-act="shop-add">Добавить</button>
   </div>
+  <div class="hint" style="margin:6px 4px 0">Можно сразу несколько — каждое с новой строки.</div>
   <div class="section-title"><span>Купить · ${buy.length}</span></div>
   ${buy.length ? `<div class="tasks" data-order>${buy.map((i) => shopRow(i, 'buy')).join('')}</div>`
     : '<div class="empty">Всё куплено. Добавь, что ещё нужно для дома.</div>'}
@@ -1329,6 +1337,186 @@ function openShopItem(id) {
     actions: {
       'si-toggle': () => { flush(); toggleShop(id); closeSheet(); },
       'si-del': () => { flush(); closeSheet(); deleteShop([id], 'Покупка удалена'); },
+    },
+  });
+}
+
+/* ---------------- Мне надо ----------------
+   Цели и желания, которые зависят от денег: у пункта есть стоимость и сколько уже
+   отложено. Сделанное не исчезает — копится в «Сделано» вместе с суммой. */
+
+const wantsLeft = () => live('wants').filter((i) => !i.done).length;
+const rub = (n) => new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(Math.round(n || 0)) + ' ₽';
+// «120 000», «120к», «1,5 млн» → число
+function parseMoney(v) {
+  let s = String(v || '').toLowerCase().replace(/[\s  ₽р]|руб\.?/g, '').replace(',', '.');
+  let k = 1;
+  if (/млн$/.test(s)) { k = 1e6; s = s.replace(/млн$/, ''); }
+  else if (/[kк]$/.test(s)) { k = 1e3; s = s.slice(0, -1); }
+  const n = parseFloat(s);
+  return isFinite(n) && n > 0 ? Math.round(n * k) : 0;
+}
+
+function addWants(text) {
+  const lines = String(text || '').split('\n').map((l) => l.replace(/^[-•*]\s*/, '').trim()).filter(Boolean);
+  let order = live('wants').reduce((m, i) => Math.max(m, i.order || 0), 0);
+  for (const line of lines) {
+    // «Кроссовки Balenciaga — 85 000» → цена сразу в карточку
+    const MONEY = '(\\d[\\d\\s  ]*(?:[.,]\\d+)?\\s*(?:к|k|млн|₽|р|руб\\.?)?)';
+    const m = line.match(new RegExp('^(.*?)\\s*[—–-]\\s*' + MONEY + '\\s*$', 'i'))
+      || line.match(/^(.*?)\s+(\d[\d\s  ]*(?:[.,]\d+)?\s*(?:к|k|млн|₽|р|руб\.?))\s*$/i);
+    const name = (m && m[1].trim()) || line;
+    const price = m ? parseMoney(m[2]) : 0;
+    const now = Date.now();
+    upsert('wants', { id: uid('w'), name, note: '', type: 'thing', price, saved: 0, done: false, doneAt: 0, order: ++order, createdAt: now, deleted: false });
+  }
+  return lines.length;
+}
+
+function wantRow(i, group) {
+  const pct = i.price ? Math.min(100, Math.round((i.saved || 0) / i.price * 100)) : 0;
+  const enough = i.price && (i.saved || 0) >= i.price;
+  const money = i.done
+    ? (i.price ? `<span class="t-where">${rub(i.price)}</span>` : '')
+    : i.price
+      ? `<span class="t-where${enough ? ' ok' : ''}">${enough ? 'хватает ✓ · ' : (i.saved ? `${rub(i.saved)} из ` : '')}${rub(i.price)}</span>`
+      : '';
+  return `<div class="task-wrap shop-wrap"${group ? ` data-group="${group}"` : ''} data-id="${i.id}">
+    <div class="task-bg l"></div>
+    <div class="task-bg r">Удалить${icon('trash')}</div>
+    <div class="task shop-row want-row${i.done ? ' done' : ''}" data-sid="${i.id}" data-kind="wants">
+      <button class="check" data-act="want-toggle" data-id="${i.id}" aria-label="${i.done ? 'Вернуть' : 'Сделано'}">${icon('check')}</button>
+      <button class="t-main" data-act="want-edit" data-id="${i.id}">
+        <div class="t-title">${esc(i.name)}</div>
+        ${money || i.note ? `<div class="t-meta">${money}${i.note ? `<span class="t-where">${esc(i.note)}</span>` : ''}</div>` : ''}
+        ${i.price && !i.done ? `<div class="want-bar"><i style="width:${pct}%"></i></div>` : ''}
+      </button>
+      <span class="t-fold want-type" aria-hidden="true">${icon(i.type === 'goal' ? 'flag' : 'bag')}</span>
+    </div>
+  </div>`;
+}
+
+function viewWants() {
+  const items = live('wants');
+  const open = items.filter((i) => !i.done).sort(byOrder);
+  const done = items.filter((i) => i.done).sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0));
+  const need = open.reduce((s, i) => s + (i.price || 0), 0);
+  const saved = open.reduce((s, i) => s + Math.min(i.saved || 0, i.price || i.saved || 0), 0);
+  const spent = done.reduce((s, i) => s + (i.price || 0), 0);
+  return `
+  <button class="back" data-act="back">${icon('chevL')}Назад</button>
+  <div class="topbar"><div><h1>Мне надо</h1></div></div>
+  <div class="day-sub">Цели и желания — вспоминать и откладывать на них</div>
+  ${need ? `<div class="want-sum">
+    <div><b>${rub(saved)}</b><span>отложено</span></div>
+    <div><b>${rub(Math.max(0, need - saved))}</b><span>осталось собрать</span></div>
+    <div class="want-bar big"><i style="width:${Math.min(100, Math.round(saved / need * 100))}%"></i></div>
+  </div>` : ''}
+  <div class="shop-add-box">
+    <textarea id="want-new" data-keep="want-new" rows="1" enterkeyhint="enter" autocomplete="off" placeholder="Что хочешь?">${esc(state.settings.wantDraft || '')}</textarea>
+    <button class="btn small" data-act="want-add">Добавить</button>
+  </div>
+  <div class="hint" style="margin:6px 4px 0">Цену можно сразу: «Права — 60 000». Несколько — каждое с новой строки.</div>
+  <div class="section-title"><span>Хочу · ${open.length}</span></div>
+  ${open.length ? `<div class="tasks" data-order>${open.map((i) => wantRow(i, 'want')).join('')}</div>`
+    : '<div class="empty">Добавь цели и вещи, на которые хочешь накопить.</div>'}
+  ${done.length ? `<div class="section-title"><span>Сделано · ${done.length}${spent ? ' · ' + rub(spent) : ''}</span></div>
+    <div class="tasks">${done.map((i) => wantRow(i, '')).join('')}</div>` : ''}
+  <div class="hint" style="text-align:center;margin-top:16px">Пункт: нажать — стоимость и отложенное, влево — удалить, удержать — переставить</div>`;
+}
+
+function wantAddFromField() {
+  const ta = $('#want-new');
+  if (!ta) return;
+  const n = addWants(ta.value);
+  if (!n) { toast('Напиши, что хочешь'); ta.focus(); return; }
+  state.settings.wantDraft = '';
+  save();
+  render();
+  const fresh = $('#want-new');
+  fresh.value = '';
+  fresh.focus();
+  toast(n > 1 ? `Добавлено ${n} ${plural(n, ['пункт', 'пункта', 'пунктов'])}` : 'Добавлено');
+}
+
+function toggleWant(id, rowEl) {
+  const i = byId('wants', id);
+  if (!i) return;
+  patch('wants', id, { done: !i.done, doneAt: i.done ? 0 : Date.now() });
+  navigator.vibrate?.(10);
+  rowEl?.classList.toggle('done', !i.done);
+  if (!i.done) toast(`«${i.name}» — сделано! 🎉`);
+  clearTimeout(toggleWant.timer);
+  toggleWant.timer = setTimeout(render, 450);
+}
+
+function deleteItems(kind, ids, label) {
+  ids.forEach((id) => patch(kind, id, { deleted: true }));
+  render();
+  toast(label, () => { ids.forEach((id) => patch(kind, id, { deleted: false })); render(); });
+}
+
+function openWant(id) {
+  if (!byId('wants', id)) return;
+  const cur = () => byId('wants', id);
+  const flush = () => {
+    const i = cur();
+    if (!i || i.deleted) return;
+    const b = entry.body;
+    const name = $('#wi-name', b)?.value.trim();
+    const note = $('#wi-note', b)?.value.trim() ?? '';
+    const price = parseMoney($('#wi-price', b)?.value);
+    const saved = parseMoney($('#wi-saved', b)?.value);
+    const ch = {};
+    if (name && name !== i.name) ch.name = name;
+    if (note !== (i.note || '')) ch.note = note;
+    if (price !== (i.price || 0)) ch.price = price;
+    if (saved !== (i.saved || 0)) ch.saved = saved;
+    if (Object.keys(ch).length) patch('wants', id, ch);
+  };
+  const paint = (e) => {
+    const i = cur();
+    $('.opts', e.body).innerHTML = `
+      <div class="seg" style="margin-top:14px"><button class="${i.type !== 'goal' ? 'on' : ''}" data-act="wi-type" data-t="thing">${icon('bag')} Вещь</button><button class="${i.type === 'goal' ? 'on' : ''}" data-act="wi-type" data-t="goal">${icon('flag')} Цель</button></div>
+      <button class="btn secondary small" data-act="wi-done" style="margin-top:16px">${i.done ? 'Вернуть в «Хочу»' : 'Отметить сделанным'}</button>
+      <button class="btn danger small" data-act="wi-del">Удалить</button>`;
+  };
+  const entry = openSheet({
+    title: 'Мне надо',
+    left: '',
+    right: 'Готово',
+    onRight: () => closeSheet(),
+    refresh: (e) => {
+      if (!$('#wi-name', e.body)) {
+        const i = cur();
+        e.body.innerHTML = `
+          <input class="input" id="wi-name" value="${esc(i.name)}" placeholder="Что именно" style="margin-top:6px;font-size:17px;font-weight:600">
+          <div class="money-grid">
+            <label><span>Стоимость, ₽</span><input class="input" id="wi-price" inputmode="decimal" value="${i.price ? rub(i.price).replace(' ₽', '') : ''}" placeholder="0"></label>
+            <label><span>Отложено, ₽</span><input class="input" id="wi-saved" inputmode="decimal" value="${i.saved ? rub(i.saved).replace(' ₽', '') : ''}" placeholder="0"></label>
+          </div>
+          <div class="add-money"><input class="input" id="wi-plus" inputmode="decimal" placeholder="Добавить к отложенному"><button class="btn small" data-act="wi-plus">+ Отложить</button></div>
+          <div class="field-label">Заметка</div>
+          <textarea class="textarea" id="wi-note" rows="2" style="min-height:70px" placeholder="Ссылка, размер, зачем это мне…">${esc(i.note || '')}</textarea>
+          <div class="opts"></div>`;
+      }
+      paint(e);
+    },
+    onClose: flush,
+    actions: {
+      'wi-type': (el) => { flush(); patch('wants', id, { type: el.dataset.t }); paint(entry); },
+      'wi-plus': () => {
+        const add = parseMoney($('#wi-plus', entry.body).value);
+        if (!add) { toast('Впиши сумму'); return; }
+        flush();
+        const saved = (cur().saved || 0) + add;
+        patch('wants', id, { saved });
+        $('#wi-saved', entry.body).value = rub(saved).replace(' ₽', '');
+        $('#wi-plus', entry.body).value = '';
+        toast(`Отложено ещё ${rub(add)}`);
+      },
+      'wi-done': () => { flush(); toggleWant(id); closeSheet(); },
+      'wi-del': () => { flush(); closeSheet(); deleteItems('wants', [id], 'Пункт удалён'); },
     },
   });
 }
@@ -2405,6 +2593,10 @@ const ACTIONS = {
   tab: (el) => nav(el.dataset.tab),
   settings: () => openSettings(),
   shopping: () => nav('shop'),
+  wants: () => nav('wants'),
+  'want-add': () => wantAddFromField(),
+  'want-toggle': (el) => toggleWant(el.dataset.id, el.closest('.shop-row')),
+  'want-edit': (el) => openWant(el.dataset.id),
   back: () => goBack(),
   'shop-add': () => shopAddFromField(),
   'shop-toggle': (el) => toggleShop(el.dataset.id, el.closest('.shop-row')),
@@ -2451,6 +2643,7 @@ document.addEventListener('click', (e) => {
   }
   if (e.target.closest('#fab')) {
     if (ui.tab === 'shop') { $('#shop-new')?.focus(); return; }
+    if (ui.tab === 'wants') { $('#want-new')?.focus(); return; }
     if (ui.tab === 'folders' && ui.folder) openNote(null, ui.folder);
     else openCapture();
     return;
@@ -2466,15 +2659,15 @@ document.addEventListener('click', (e) => {
 document.addEventListener('contextmenu', (e) => { if (e.target.closest('.tile, .task, .week, .nrow, .frow, .shop-row')) e.preventDefault(); });
 
 document.addEventListener('beforeinput', (e) => {
-  if (e.target.id === 'shop-new' && (e.inputType === 'insertLineBreak' || e.inputType === 'insertParagraph')) {
+  if ((e.target.id === 'shop-new' || e.target.id === 'want-new') && (e.inputType === 'insertLineBreak' || e.inputType === 'insertParagraph')) {
     e.preventDefault();
-    shopAddFromField();
+    if (e.target.id === 'shop-new') shopAddFromField(); else wantAddFromField();
   }
 });
 document.addEventListener('input', (e) => {
-  if (e.target.id !== 'shop-new') return;
+  if (e.target.id !== 'shop-new' && e.target.id !== 'want-new') return;
   autoGrow(e.target);
-  state.settings.shopDraft = e.target.value;
+  state.settings[e.target.id === 'shop-new' ? 'shopDraft' : 'wantDraft'] = e.target.value;
   clearTimeout(e.target._t);
   e.target._t = setTimeout(save, 400);
 });
@@ -2550,8 +2743,9 @@ function gStart(x, y, target) {
   const srow = target.closest('.shop-row');
   if (srow) {
     const wrap = srow.parentElement;
-    g = { ...base, type: 'shoprow', row: srow, id: srow.dataset.sid };
-    if (wrap.dataset.group) g.timer = setTimeout(() => startListDrag(g, wrap, '.shop-wrap', (ids) => reorder('shop', ids)), HOLD_MS);
+    const kind = srow.dataset.kind || 'shop';
+    g = { ...base, type: 'shoprow', row: srow, id: srow.dataset.sid, kind };
+    if (wrap.dataset.group) g.timer = setTimeout(() => startListDrag(g, wrap, '.shop-wrap', (ids) => reorder(kind, ids)), HOLD_MS);
     return;
   }
   const nrow = target.closest('.nrow');
@@ -2713,7 +2907,7 @@ function gEnd(cancelled) {
     wrap.querySelectorAll('.l, .r').forEach((b) => { b.style.transition = 'opacity .2s'; b.style.opacity = 0; });
     if (cancelled || Math.abs(s.dx) - 10 <= SWIPE_AT) return;
     if (s.type === 'shoprow') {
-      if (s.dx < 0) { const i = byId('shop', s.id); deleteShop([s.id], `«${i?.name || 'Покупка'}» удалена`); }
+      if (s.dx < 0) { const i = byId(s.kind, s.id); deleteItems(s.kind, [s.id], `«${i?.name || 'Пункт'}» — удалено`); }
       return;
     }
     if (s.type === 'task') {
@@ -2848,6 +3042,7 @@ window.addEventListener('offline', () => { if (state && !ui.sheets.length && !ty
 function migrate() {
   state.files ||= [];
   state.shop ||= [];
+  state.wants ||= [];
   for (const t of state.tasks) {
     if (t.noteId === undefined) { t.noteId = ''; t._dirty = true; }
     if (t.remind === undefined) t.remind = '';
