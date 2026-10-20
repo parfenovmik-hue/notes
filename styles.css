@@ -1000,3 +1000,7 @@ svg.i, .i svg { fill: none; stroke: currentColor; stroke-width: 1.9; stroke-line
 }
 .mouse-only { display: none; }
 @media (hover: hover) and (pointer: fine) { .mouse-only { display: block; } .touch-only { display: none; } }
+.t-hover .t-grip { cursor: grab; }
+.t-hover .t-grip:active, .lifted .t-grip { cursor: grabbing; }
+.t-grip svg { stroke-width: 2.6; }
+.t-fold.empty { visibility: hidden; }

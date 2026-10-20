@@ -7,7 +7,7 @@
    через Apps Script (см. google-apps-script/Code.gs). Файлы — в Google Диске.
    ========================================================= */
 
-const APP_VERSION = '0.8.0';
+const APP_VERSION = '0.8.1';
 
 /* ---------------- Утилиты ---------------- */
 
@@ -108,6 +108,7 @@ const P = {
   outdent: '<path d="M3.5 5.5h17M11 10h9.5M11 14h9.5M3.5 18.5h17M7 9.5 4 12l3 2.5"/>',
   indent: '<path d="M3.5 5.5h17M11 10h9.5M11 14h9.5M3.5 18.5h17M4 9.5 7 12l-3 2.5"/>',
   quote: '<path d="M5 5v14"/><path d="M9.5 8H20M9.5 12H20M9.5 16h7"/>',
+  grip: '<circle cx="9" cy="6" r=".9"/><circle cx="15" cy="6" r=".9"/><circle cx="9" cy="12" r=".9"/><circle cx="15" cy="12" r=".9"/><circle cx="9" cy="18" r=".9"/><circle cx="15" cy="18" r=".9"/>',
   star: '<path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"/>',
   flag: '<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>',
   bag: '<path d="M5 8h14l-1.2 12H6.2z"/><path d="M9 8V6.5a3 3 0 0 1 6 0V8"/>',
@@ -881,8 +882,8 @@ function taskRow(t, opts = {}) {
         <div class="t-title">${title || '<span style="color:var(--muted)">Без названия</span>'}</div>
         <div class="t-meta">${meta.join('')}</div>
       </button>
-      ${t.done ? '' : `<span class="t-hover"><button data-act="task-move" data-id="${t.id}" title="Перенести на другой день">${icon('cal')}</button><button data-act="task-pin" data-id="${t.id}" title="${t.pinned ? 'Открепить' : 'Закрепить сверху'}">${icon('pin')}</button></span>`}
-      ${f ? `<span class="t-fold${f.image ? ' img' : ''}" style="${fc(f)}" aria-hidden="true">${folderIcon(f)}</span>` : ''}
+      ${t.done ? '' : `<span class="t-hover"><button data-act="task-move" data-id="${t.id}" title="Перенести на другой день">${icon('cal')}</button><button data-act="task-pin" data-id="${t.id}" title="${t.pinned ? 'Открепить' : 'Закрепить сверху'}">${icon('pin')}</button>${opts.group ? `<button class="t-grip" title="Потяни, чтобы поменять порядок" aria-label="Поменять порядок">${icon('grip')}</button>` : ''}</span>`}
+      ${f ? `<span class="t-fold${f.image ? ' img' : ''}" style="${fc(f)}" aria-hidden="true">${folderIcon(f)}</span>` : '<span class="t-fold empty" aria-hidden="true"></span>'}
     </div>
   </div>`;
 }
@@ -996,7 +997,7 @@ function viewToday() {
     <div class="section-title late-head" id="late"><span>С предыдущих дней · ${late.length}</span><button data-act="late-today">Всё на сегодня</button></div>
     <div class="tasks">${late.map((t) => taskRow(t, { showDate: true })).join('')}</div>` : ''}
   <div class="hint touch-only" style="text-align:center;margin-top:14px">Дело: вправо — перенести, влево — закрепить, удержать — переставить</div>
-  <div class="hint mouse-only" style="text-align:center;margin-top:14px">Наведи на дело — перенести или закрепить · N — новая запись · ← → — дни · порядок — перетащи, удерживая</div>`;
+  <div class="hint mouse-only" style="text-align:center;margin-top:14px">Наведи на дело: перенести, закрепить, ⋮⋮ — потянуть и поменять порядок · N — новая запись · ← → — дни</div>`;
 }
 
 // Папки стоят в ячейках сетки 3×N; order — номер ячейки, пустые ячейки допустимы
@@ -2794,6 +2795,18 @@ document.addEventListener('focusout', (e) => {
   if (inp && addFromInput(inp, false)) setTimeout(render, 300);
 });
 
+// Новый порядок дел. Закреплённые всегда сверху: дело, утащенное в их зону, закрепляется,
+// а закреплённое, утащенное ниже обычных, — открепляется.
+function dropTasks(ids, movedId) {
+  const others = ids.filter((x) => x !== movedId);
+  const pinnedCount = others.filter((x) => byId('tasks', x)?.pinned).length;
+  const to = ids.indexOf(movedId);
+  const t = byId('tasks', movedId);
+  if (t && to < pinnedCount && !t.pinned) patch('tasks', movedId, { pinned: true });
+  else if (t && to > pinnedCount && t.pinned) patch('tasks', movedId, { pinned: false });
+  reorder('tasks', ids);
+}
+
 /* ---------------- Жесты ----------------
    Касания обрабатываем touch-событиями (на iPhone их можно остановить, чтобы
    не прокручивалась страница), мышь — для компьютера.
@@ -2824,11 +2837,18 @@ function gStart(x, y, target) {
     return;
   }
   if (target.closest('input, textarea, [contenteditable="true"]')) return;
+  const grip = target.closest('.t-grip');
+  if (grip) {
+    const wrap = grip.closest('.task-wrap');
+    g = { ...base, type: 'task', row: grip.closest('.task'), id: wrap.dataset.id };
+    startListDrag(g, wrap, '.task-wrap', dropTasks, true);
+    return;
+  }
   const task = target.closest('.task[data-id]');
   if (task) {
     g = { ...base, type: 'task', row: task, id: task.dataset.id };
     const wrap = task.parentElement;
-    if (wrap.dataset.group && wrap.parentElement.hasAttribute('data-order')) g.timer = setTimeout(() => startListDrag(g, wrap, '.task-wrap', (ids) => reorder('tasks', ids)), HOLD_MS);
+    if (wrap.dataset.group && wrap.parentElement.hasAttribute('data-order')) g.timer = setTimeout(() => startListDrag(g, wrap, '.task-wrap', dropTasks, true), HOLD_MS);
     return;
   }
   const srow = target.closest('.shop-row');
@@ -3023,9 +3043,10 @@ function gEnd(cancelled) {
 }
 
 // Перетаскивание строки в списке: соседи раздвигаются, порядок сохраняется при отпускании
-function startListDrag(gs, el, selector, onDrop) {
+function startListDrag(gs, el, selector, onDrop, cross = false) {
   if (g !== gs) return;
-  const items = [...el.parentElement.children].filter((c) => c.matches(selector) && c.dataset.group === el.dataset.group);
+  // cross — можно перетаскивать между группами (закреплённые ↔ обычные дела)
+  const items = [...el.parentElement.children].filter((c) => c.matches(selector) && c.dataset.group && (cross || c.dataset.group === el.dataset.group));
   const rects = items.map((i) => i.getBoundingClientRect());
   const idx = items.indexOf(el), h = rects[idx].height;
   let to = idx;
@@ -3052,7 +3073,7 @@ function startListDrag(gs, el, selector, onDrop) {
         const ids = items.map((i) => i.dataset.id);
         const [m] = ids.splice(idx, 1);
         ids.splice(to, 0, m);
-        onDrop(ids);
+        onDrop(ids, m);
       }
       render();
     },
