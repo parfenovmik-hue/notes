@@ -7,7 +7,7 @@
    через Apps Script (см. google-apps-script/Code.gs). Файлы — в Google Диске.
    ========================================================= */
 
-const APP_VERSION = '0.8.2';
+const APP_VERSION = '0.9.0';
 
 /* ---------------- Утилиты ---------------- */
 
@@ -978,7 +978,7 @@ function viewToday() {
       <button class="icon-btn" data-act="settings" aria-label="Настройки">${icon('gear')}</button>
     </div>
   </div>
-  <div class="day-sub">${esc(dateLong(d))}${navigator.onLine ? '' : '<span class="offline">нет сети — всё сохраняется на телефоне</span>'}</div>
+  <div class="day-sub with-search"><span>${esc(dateLong(d))}${navigator.onLine ? '' : '<span class="offline">нет сети — всё сохраняется на телефоне</span>'}</span><button class="sub-search" data-act="task-search">${icon('search')}Поиск</button></div>
   ${tip ? `<div class="card info-card"><div>Установи на экран «Домой»: в Safari нажми <b>Поделиться</b> → <b>На экран «Домой»</b>.</div><button data-act="hide-tip" aria-label="Скрыть">×</button></div>` : ''}
   <div class="day-nav">
     <button class="arrow" data-act="day-shift" data-n="-1" aria-label="Предыдущий день">${icon('chevL')}</button>
@@ -1552,6 +1552,84 @@ function openWant(id) {
       'wi-del': () => { flush(); closeSheet(); deleteItems('wants', [id], 'Пункт удалён'); },
     },
   });
+}
+
+/* ---------------- Поиск дел по всем дням ----------------
+   Ищет в названии и заметке дела; результаты сгруппированы по дням.
+   Нажатие — переход в этот день с подсветкой дела. */
+
+function openTaskSearch() {
+  const today = ymd();
+  const paint = (e) => {
+    const q = $('#ts-q', e.body)?.value || '';
+    const words = qWords(q);
+    const out = $('.ts-out', e.body);
+    if (!words.length) { out.innerHTML = '<div class="empty" style="padding:22px 10px">Начни вводить — например, «анима»</div>'; return; }
+    const found = live('tasks').filter((t) => matches(t.title + '\n' + t.note, words));
+    if (!found.length) { out.innerHTML = '<div class="empty" style="padding:22px 10px">Ничего не найдено</div>'; return; }
+    // Сначала будущие и сегодня (ближайшие выше), потом прошедшие (свежие выше), в конце — без даты
+    const rank = (d) => (!d ? 3 : d >= today ? 0 : 1);
+    found.sort((a, b) => rank(a.date) - rank(b.date) || (rank(a.date) === 0 ? a.date.localeCompare(b.date) : (b.date || '').localeCompare(a.date || '')) || a.done - b.done);
+    const groups = [];
+    for (const t of found.slice(0, 150)) {
+      const key = t.date || '';
+      if (!groups.length || groups[groups.length - 1].key !== key) groups.push({ key, items: [] });
+      groups[groups.length - 1].items.push(t);
+    }
+    out.innerHTML = `<div class="ts-count">${found.length} ${plural(found.length, ['дело', 'дела', 'дел'])}</div>` + groups.map((gr) => `
+      <div class="section-title"><span>${gr.key ? esc(dateLong(gr.key)) + (dayWord(gr.key) ? ' · ' + dayWord(gr.key).toLowerCase() : '') : 'Без даты'}</span></div>
+      <div class="card">${gr.items.map((t) => {
+        const f = liveFolder(t.folder);
+        const n = liveById('notes', t.noteId);
+        const where = [f?.name, n && n.title !== 'Дела' ? noteTitle(n) : ''].filter(Boolean).join(' · ');
+        const noteHit = !matches(t.title, words) && t.note ? snippet(t.note, words) : '';
+        return `<button class="note-row ts-row${t.done ? ' done' : ''}" data-act="ts-go" data-id="${t.id}">
+          <span class="ts-check">${t.done ? icon('check') : ''}</span>
+          <div class="n-main"><div class="n-title">${hl(t.title, words)}</div>
+            ${where || noteHit ? `<div class="n-prev">${noteHit ? hl(noteHit, words) : esc(where)}</div>` : ''}</div>
+          ${t.date ? `<span class="ts-day">${esc(dayMonth(t.date))}</span>` : ''}
+        </button>`;
+      }).join('')}</div>`).join('');
+  };
+  const entry = openSheet({
+    title: 'Поиск дел',
+    left: 'Закрыть',
+    tall: true,
+    cls: 'ts-sheet',
+    refresh: (e) => {
+      if (!$('#ts-q', e.body)) {
+        e.body.innerHTML = `<label class="search" style="margin-top:4px">${icon('search')}<input type="search" id="ts-q" value="${esc(ui.taskQ || '')}" placeholder="Что ищем? Например, «анима»" enterkeyhint="search" autocomplete="off" autocorrect="off"></label><div class="ts-out"></div>`;
+      }
+      paint(e);
+    },
+    onInput: (e) => {
+      if (e.target.id !== 'ts-q') return;
+      ui.taskQ = e.target.value;
+      paint(entry);
+    },
+    actions: {
+      'ts-go': (el) => {
+        const t = byId('tasks', el.dataset.id);
+        if (!t) return;
+        if (!t.date) { openTask(t.id); return; }
+        closeSheet();
+        ui.day = t.date;
+        nav('today');
+        // Подсветить найденное дело в его дне
+        setTimeout(() => {
+          const row = $(`.task[data-id="${t.id}"]`)?.closest('.task-wrap');
+          if (!row) return;
+          row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          row.classList.add('flash');
+          setTimeout(() => row.classList.remove('flash'), 1800);
+        }, 60);
+      },
+    },
+  });
+  entry.sh.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.id === 'ts-q') { e.preventDefault(); $('.ts-row', entry.body)?.click(); }
+  });
+  setTimeout(() => { const i = $('#ts-q', entry.body); i?.focus(); i?.select(); }, 80);
 }
 
 /* ---------------- Быстрое добавление (кнопка +) ---------------- */
@@ -2671,6 +2749,7 @@ const ACTIONS = {
   'task-move': (el) => { const t = byId('tasks', el.dataset.id); openDatePicker({ current: t?.date || '', onPick: (d) => moveTasks([el.dataset.id], d) }); },
   'task-pin': (el) => togglePinTask(el.dataset.id),
   shopping: () => nav('shop'),
+  'task-search': () => openTaskSearch(),
   wants: () => nav('wants'),
   'want-add': () => wantAddFromField(),
   'want-toggle': (el) => toggleWant(el.dataset.id, el.closest('.shop-row')),
@@ -2781,6 +2860,7 @@ document.addEventListener('keydown', (e) => {
       render();
       return;
     }
+    if (e.key === '/' && ui.tab === 'today') { e.preventDefault(); openTaskSearch(); return; }
     if (e.key === '/' && $('[data-search]')) { e.preventDefault(); $('[data-search]').focus(); return; }
   }
   if (e.key !== 'Enter' || e.isComposing) return;

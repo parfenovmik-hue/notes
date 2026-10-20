@@ -3,7 +3,7 @@
 // Новая версия приходит целиком: меняется номер CACHE → браузер ставит новый
 // service worker, тот скачивает все файлы заново и перезагружает приложение.
 // При изменении файлов ОБЯЗАТЕЛЬНО увеличь номер версии.
-const CACHE = 'notespanel-v20';
+const CACHE = 'notespanel-v21';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png', 'icons/folders/most.png', 'icons/folders/vozvraty.png'];
 
 self.addEventListener('install', (e) => {
