@@ -7,7 +7,7 @@
    через Apps Script (см. google-apps-script/Code.gs). Файлы — в Google Диске.
    ========================================================= */
 
-const APP_VERSION = '0.7.1';
+const APP_VERSION = '0.8.0';
 
 /* ---------------- Утилиты ---------------- */
 
@@ -881,6 +881,7 @@ function taskRow(t, opts = {}) {
         <div class="t-title">${title || '<span style="color:var(--muted)">Без названия</span>'}</div>
         <div class="t-meta">${meta.join('')}</div>
       </button>
+      ${t.done ? '' : `<span class="t-hover"><button data-act="task-move" data-id="${t.id}" title="Перенести на другой день">${icon('cal')}</button><button data-act="task-pin" data-id="${t.id}" title="${t.pinned ? 'Открепить' : 'Закрепить сверху'}">${icon('pin')}</button></span>`}
       ${f ? `<span class="t-fold${f.image ? ' img' : ''}" style="${fc(f)}" aria-hidden="true">${folderIcon(f)}</span>` : ''}
     </div>
   </div>`;
@@ -994,7 +995,8 @@ function viewToday() {
   ${late.length ? `
     <div class="section-title late-head" id="late"><span>С предыдущих дней · ${late.length}</span><button data-act="late-today">Всё на сегодня</button></div>
     <div class="tasks">${late.map((t) => taskRow(t, { showDate: true })).join('')}</div>` : ''}
-  <div class="hint" style="text-align:center;margin-top:14px">Дело: вправо — перенести, влево — закрепить, удержать — переставить</div>`;
+  <div class="hint touch-only" style="text-align:center;margin-top:14px">Дело: вправо — перенести, влево — закрепить, удержать — переставить</div>
+  <div class="hint mouse-only" style="text-align:center;margin-top:14px">Наведи на дело — перенести или закрепить · N — новая запись · ← → — дни · порядок — перетащи, удерживая</div>`;
 }
 
 // Папки стоят в ячейках сетки 3×N; order — номер ячейки, пустые ячейки допустимы
@@ -1162,6 +1164,7 @@ function render() {
   }
   const n = inboxCount();
   $('#inbox-badge').textContent = n ? String(n) : '';
+  renderSidebar();
   if (ui.refocus) {
     $(`[data-add="${ui.refocus}"]`)?.focus();
     ui.refocus = '';
@@ -1172,6 +1175,35 @@ function renderSearch(inp) {
   if (!body) return;
   if (inp.dataset.search === 'all') body.innerHTML = ui.qAll.trim() ? searchAll(ui.qAll) : foldersGrid();
   else if (liveFolder(ui.folder)) body.innerHTML = folderBody(liveFolder(ui.folder));
+}
+
+/* ---------------- Боковая панель (широкий экран, компьютер) ---------------- */
+
+function renderSidebar() {
+  const sb = $('#sidebar');
+  if (!sb || !matchMedia('(min-width: 900px)').matches) return;
+  const today = ymd();
+  const todayOpen = live('tasks').filter((t) => !t.done && t.date && t.date <= today).length;
+  const item = (tab, ic, label, count, active, extra = '') =>
+    `<button class="sb-item${active ? ' on' : ''}" data-act="sb" data-tab="${tab}"${extra}>${ic}<span>${label}</span>${count ? `<i>${count}</i>` : ''}</button>`;
+  const fold = folders().map((f) => `<button class="sb-item sb-folder${ui.tab === 'folders' && ui.folder === f.id ? ' on' : ''}" data-act="sb" data-tab="folders" data-folder="${f.id}" style="${fc(f)}">
+      <span class="sb-fico${f.image ? ' img' : ''}">${folderIcon(f)}</span><span>${esc(f.name)}</span></button>`).join('');
+  const sync = { ok: 'ok', error: 'err', busy: 'wait' }[ui.sync.status] || '';
+  sb.innerHTML = `
+    <div class="sb-title">Заметки</div>
+    <button class="btn small sb-new" data-act="new-entry">${icon('plus')} Новая запись</button>
+    ${item('today', svg('<rect x="4" y="4" width="16" height="16" rx="4"/><path d="m8.5 12 2.5 2.5 4.5-5"/>'), 'Сегодня', todayOpen, ui.tab === 'today')}
+    ${item('calendar', icon('cal'), 'Календарь', 0, ui.tab === 'calendar')}
+    ${item('inbox', icon('inbox'), 'Входящие', inboxCount(), ui.tab === 'inbox')}
+    <div class="sb-sep"></div>
+    ${item('shop', svg(FOLDER_ICONS.cart), 'Покупки', shopLeft(), ui.tab === 'shop')}
+    ${item('wants', icon('star'), 'Мне надо', wantsLeft(), ui.tab === 'wants')}
+    <div class="sb-sep"></div>
+    ${item('folders', svg(FOLDER_ICONS.folder), 'Папки', 0, ui.tab === 'folders' && !ui.folder)}
+    <div class="sb-folders">${fold}</div>
+    <div class="sb-foot">
+      <button class="sb-item" data-act="settings">${icon('gear')}<span>Настройки</span>${state.settings.syncUrl ? `<span class="sync-dot ${sync}" title="Синхронизация"></span>` : ''}</button>
+    </div>`;
 }
 
 /* ---------------- Выбор даты (и времени напоминания) ---------------- */
@@ -2469,6 +2501,24 @@ async function testPush() {
   } catch (e) { toast(e.message); }
 }
 
+/* ---------------- Код подключения ----------------
+   «notes1:…» — адрес таблицы и ключ одной строкой, чтобы подключить новое устройство. */
+
+function connCode() {
+  const s = state.settings;
+  return 'notes1:' + btoa(unescape(encodeURIComponent(JSON.stringify({ u: s.syncUrl, s: s.syncSecret }))));
+}
+function applyConnCode(code) {
+  const m = String(code).trim().match(/^notes1:([A-Za-z0-9+/=]+)$/);
+  if (!m) throw new Error('bad code');
+  const o = JSON.parse(decodeURIComponent(escape(atob(m[1]))));
+  if (!/^https:\/\/script\.google\.com\//.test(o.u || '') || !o.s) throw new Error('bad code');
+  state.settings.syncUrl = o.u;
+  state.settings.syncSecret = o.s;
+  save();
+  syncNow(true);
+}
+
 /* ---------------- Настройки ---------------- */
 
 function openSettings() {
@@ -2498,6 +2548,10 @@ function openSettings() {
         <input class="input" id="s-secret" placeholder="Тот же, что в скрипте" value="${esc(s.syncSecret)}" autocapitalize="off" autocorrect="off" spellcheck="false">
         <div class="hint">${syncState ? `<span class="sync-dot ${syncState[0]}"></span>${esc(syncState[1])} · ` : ''}последняя синхронизация: ${last}</div>
         <button class="btn small" data-act="sync-now">Синхронизировать сейчас</button>
+        <div class="field-label">Подключить другое устройство</div>
+        ${s.syncUrl && s.syncSecret ? '<button class="btn secondary small" data-act="conn-copy" style="margin-top:0">Скопировать код подключения</button>' : ''}
+        <input class="input" id="s-conn" placeholder="Вставь код с другого устройства" autocapitalize="off" autocorrect="off" spellcheck="false" style="margin-top:8px">
+        <div class="hint">Код содержит адрес и ключ: на новом устройстве достаточно вставить его сюда.</div>
       </div>
       <div class="section-title"><span>Жесты</span></div>
       <div class="card info-card" style="margin:0"><div>
@@ -2520,6 +2574,11 @@ function openSettings() {
     onInput: (e) => {
       if (e.type !== 'change') return;
       const s = state.settings, id = e.target.id;
+      if (id === 's-conn') {
+        if (!e.target.value.trim()) return;
+        try { applyConnCode(e.target.value); toast('Подключено — загружаю данные…'); refreshTopSheet(); } catch (err) { toast('Код не подошёл — скопируй его ещё раз'); }
+        return;
+      }
       if (id === 's-url') s.syncUrl = e.target.value.trim();
       else if (id === 's-secret') s.syncSecret = e.target.value.trim();
       else if (id === 's-digest') s.digestOn = e.target.checked;
@@ -2532,6 +2591,10 @@ function openSettings() {
     },
     actions: {
       'push-on': () => enablePush(),
+      'conn-copy': async () => {
+        try { await navigator.clipboard.writeText(connCode()); toast('Код скопирован — вставь его на другом устройстве'); }
+        catch (e) { prompt('Скопируй код подключения:', connCode()); }
+      },
       'push-test': () => testPush(),
     },
   });
@@ -2592,6 +2655,20 @@ const ACTIONS = {
   'toast-undo': () => { const u = toastUndo; toastUndo = null; $('#toast').classList.remove('show'); u?.(); },
   tab: (el) => nav(el.dataset.tab),
   settings: () => openSettings(),
+  sb: (el) => {
+    while (ui.sheets.length) closeSheet();
+    if (el.dataset.tab === 'today') ui.day = ymd();
+    if (el.dataset.tab === 'folders') ui.qFolder = '';
+    nav(el.dataset.tab, el.dataset.folder || '');
+  },
+  'new-entry': () => {
+    if (ui.tab === 'folders' && ui.folder) openNote(null, ui.folder);
+    else if (ui.tab === 'shop') $('#shop-new')?.focus();
+    else if (ui.tab === 'wants') $('#want-new')?.focus();
+    else openCapture();
+  },
+  'task-move': (el) => { const t = byId('tasks', el.dataset.id); openDatePicker({ current: t?.date || '', onPick: (d) => moveTasks([el.dataset.id], d) }); },
+  'task-pin': (el) => togglePinTask(el.dataset.id),
   shopping: () => nav('shop'),
   wants: () => nav('wants'),
   'want-add': () => wantAddFromField(),
@@ -2691,6 +2768,20 @@ function addFromInput(inp, keepFocus) {
 }
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { goBack(); return; }
+  // Клавиши, когда курсор не в поле ввода: N — новая запись, ←/→ — дни, / — поиск
+  const a = document.activeElement;
+  const typing = a && (/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) || a.isContentEditable);
+  if (!typing && !ui.sheets.length && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    if (e.key === 'n' || e.key === 'т') { e.preventDefault(); ACTIONS['new-entry'](); return; }
+    if (ui.tab === 'today' && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      e.preventDefault();
+      ui.dayAnim = e.key === 'ArrowRight' ? 1 : -1;
+      ui.day = addDays(ui.day, ui.dayAnim);
+      render();
+      return;
+    }
+    if (e.key === '/' && $('[data-search]')) { e.preventDefault(); $('[data-search]').focus(); return; }
+  }
   if (e.key !== 'Enter' || e.isComposing) return;
   const inp = e.target.closest?.('[data-add]');
   if (inp) { e.preventDefault(); if (addFromInput(inp, true)) render(); else inp.blur(); return; }
@@ -3013,6 +3104,7 @@ document.addEventListener('touchcancel', () => gEnd(true));
 document.addEventListener('mousedown', (e) => {
   if (e.button || Date.now() - lastTouchAt < 800) return;
   gStart(e.clientX, e.clientY, e.target);
+  if (g && /^(day|pull|edge)$/.test(g.type)) g = null;
   if (g) g.mouse = true;
 });
 document.addEventListener('mousemove', (e) => { if (g?.mouse && e.buttons === 1 && gMove(e.clientX, e.clientY)) e.preventDefault(); });
@@ -3035,6 +3127,8 @@ document.addEventListener('visibilitychange', () => {
     if (state.settings.syncUrl) scheduleSync(800);
   }
 });
+// Перешли через ширину 900 px (окно на компьютере) — перестроить боковую панель
+matchMedia('(min-width: 900px)').addEventListener('change', () => { if (state) render(); });
 window.addEventListener('online', () => { if (!state) return; scheduleSync(500); if (!ui.sheets.length && !typingInView()) render(); });
 window.addEventListener('offline', () => { if (state && !ui.sheets.length && !typingInView()) render(); });
 
