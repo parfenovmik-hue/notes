@@ -7,7 +7,7 @@
    через Apps Script (см. google-apps-script/Code.gs). Файлы — в Google Диске.
    ========================================================= */
 
-const APP_VERSION = '0.10.0';
+const APP_VERSION = '0.10.1';
 
 /* ---------------- Утилиты ---------------- */
 
@@ -1471,13 +1471,7 @@ function addWants(text) {
 }
 
 function wantRow(i, group) {
-  const pct = i.price ? Math.min(100, Math.round((i.saved || 0) / i.price * 100)) : 0;
-  const enough = i.price && (i.saved || 0) >= i.price;
-  const cash = i.done
-    ? (i.price ? `<span class="t-where">${money(i.price, i.cur)}</span>` : '')
-    : i.price
-      ? `<span class="t-where${enough ? ' ok' : ''}">${enough ? 'хватает ✓ · ' : (i.saved ? `${money(i.saved, i.cur)} из ` : '')}${money(i.price, i.cur)}</span>`
-      : '';
+  const cash = i.price ? `<span class="t-where">${money(i.price, i.cur)}</span>` : '';
   const state = i.status === 'loading' ? '<span class="t-where want-loading">Оформляю карточку по ссылке…</span>'
     : i.status === 'error' ? '<span class="t-where late">Не оформилось — нажми, чтобы повторить</span>' : '';
   return `<div class="task-wrap shop-wrap"${group ? ` data-group="${group}"` : ''} data-id="${i.id}">
@@ -1488,7 +1482,6 @@ function wantRow(i, group) {
       <button class="t-main" data-act="want-edit" data-id="${i.id}">
         <div class="t-title">${esc(i.name)}</div>
         ${cash || state || i.note ? `<div class="t-meta">${state}${cash}${i.note && !state ? `<span class="t-where">${esc(i.note)}</span>` : ''}</div>` : ''}
-        ${i.price && !i.done ? `<div class="want-bar"><i style="width:${pct}%"></i></div>` : ''}
       </button>
       ${i.image ? `<span class="want-pic"><img src="${esc(i.image)}" alt="" loading="lazy" referrerpolicy="no-referrer"></span>` : `<span class="t-fold want-type" aria-hidden="true">${icon(i.type === 'goal' ? 'flag' : 'bag')}</span>`}
     </div>
@@ -1499,18 +1492,10 @@ function viewWants() {
   const items = live('wants');
   const open = items.filter((i) => !i.done).sort(byOrder);
   const done = items.filter((i) => i.done).sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0));
-  const need = open.filter(isRub).reduce((s, i) => s + (i.price || 0), 0);
-  const saved = open.filter(isRub).reduce((s, i) => s + Math.min(i.saved || 0, i.price || i.saved || 0), 0);
-  const spent = done.filter(isRub).reduce((s, i) => s + (i.price || 0), 0);
   return `
   <button class="back" data-act="back">${icon('chevL')}Назад</button>
   <div class="topbar"><div><h1>Мне надо</h1></div></div>
-  <div class="day-sub">Цели и желания — вспоминать и откладывать на них</div>
-  ${need ? `<div class="want-sum">
-    <div><b>${rub(saved)}</b><span>отложено</span></div>
-    <div><b>${rub(Math.max(0, need - saved))}</b><span>осталось собрать</span></div>
-    <div class="want-bar big"><i style="width:${Math.min(100, Math.round(saved / need * 100))}%"></i></div>
-  </div>` : ''}
+  <div class="day-sub">Цели и желания — чтобы держать их перед глазами</div>
   <div class="shop-add-box">
     <textarea id="want-new" data-keep="want-new" rows="1" enterkeyhint="enter" autocomplete="off" placeholder="Что хочешь или ссылка">${esc(state.settings.wantDraft || '')}</textarea>
     <button class="btn small" data-act="want-add">Добавить</button>
@@ -1518,10 +1503,10 @@ function viewWants() {
   <div class="hint" style="margin:6px 4px 0">Вставь ссылку — карточку с фото, ценой и характеристиками оформит Claude. Или напиши сам, можно с ценой: «Права — 60 000».</div>
   <div class="section-title"><span>Хочу · ${open.length}</span></div>
   ${open.length ? `<div class="tasks" data-order>${open.map((i) => wantRow(i, 'want')).join('')}</div>`
-    : '<div class="empty">Добавь цели и вещи, на которые хочешь накопить.</div>'}
-  ${done.length ? `<div class="section-title"><span>Сделано · ${done.length}${spent ? ' · ' + rub(spent) : ''}</span></div>
+    : '<div class="empty">Добавь цели и вещи, которые хочешь.</div>'}
+  ${done.length ? `<div class="section-title"><span>Сделано · ${done.length}</span></div>
     <div class="tasks">${done.map((i) => wantRow(i, '')).join('')}</div>` : ''}
-  <div class="hint" style="text-align:center;margin-top:16px">Пункт: нажать — стоимость и отложенное, влево — удалить, удержать — переставить</div>`;
+  <div class="hint" style="text-align:center;margin-top:16px">Пункт: нажать — подробнее, влево — удалить, удержать — переставить</div>`;
 }
 
 // Ссылки, которые нужно оформить. Оформляем то, что добавлено здесь, или «зависшее» дольше 2 минут.
@@ -1611,18 +1596,17 @@ function openWant(id) {
   let shown = {};
   const snap = () => {
     const b = entry.body;
-    shown = { name: $('#wi-name', b)?.value, price: $('#wi-price', b)?.value, saved: $('#wi-saved', b)?.value, note: $('#wi-note', b)?.value };
+    shown = { name: $('#wi-name', b)?.value, price: $('#wi-price', b)?.value, note: $('#wi-note', b)?.value };
   };
   const flush = () => {
     const i = cur();
     if (!i || i.deleted) return;
     const b = entry.body;
-    const v = { name: $('#wi-name', b)?.value, price: $('#wi-price', b)?.value, saved: $('#wi-saved', b)?.value, note: $('#wi-note', b)?.value };
+    const v = { name: $('#wi-name', b)?.value, price: $('#wi-price', b)?.value, note: $('#wi-note', b)?.value };
     const ch = {};
     if (v.name !== shown.name && v.name.trim()) ch.name = v.name.trim();
     if (v.note !== shown.note) ch.note = v.note.trim();
     if (v.price !== shown.price) ch.price = parseMoney(v.price);
-    if (v.saved !== shown.saved) ch.saved = parseMoney(v.saved);
     if (Object.keys(ch).length) patch('wants', id, ch);
     snap();
   };
@@ -1663,13 +1647,9 @@ function openWant(id) {
         e.body.innerHTML = `
           <div class="want-hero"></div>
           <input class="input" id="wi-name" value="${esc(i.name)}" placeholder="Что именно" style="margin-top:6px;font-size:17px;font-weight:600">
-          <div class="money-grid">
-            <label><span>Стоимость, ${esc(sign)}</span><input class="input" id="wi-price" inputmode="decimal" value="${num(i.price)}" placeholder="0"></label>
-            <label><span>Отложено, ${esc(sign)}</span><input class="input" id="wi-saved" inputmode="decimal" value="${num(i.saved)}" placeholder="0"></label>
-          </div>
-          <div class="add-money"><input class="input" id="wi-plus" inputmode="decimal" placeholder="Добавить к отложенному"><button class="btn small" data-act="wi-plus">+ Отложить</button></div>
+          <label class="price-field"><span>Цена, ${esc(sign)}</span><input class="input" id="wi-price" inputmode="decimal" value="${num(i.price)}" placeholder="—"></label>
           <div class="field-label">Заметка</div>
-          <textarea class="textarea" id="wi-note" rows="2" style="min-height:70px" placeholder="Ссылка, размер, зачем это мне…">${esc(i.note || '')}</textarea>
+          <textarea class="textarea" id="wi-note" rows="2" style="min-height:70px" placeholder="Размер, цвет, зачем это мне…">${esc(i.note || '')}</textarea>
           <div class="opts"></div>`;
         setTimeout(snap, 0);
       }
@@ -1697,16 +1677,6 @@ function openWant(id) {
             paint(entry);
           }
         });
-      },
-      'wi-plus': () => {
-        const add = parseMoney($('#wi-plus', entry.body).value);
-        if (!add) { toast('Впиши сумму'); return; }
-        flush();
-        const saved = (cur().saved || 0) + add;
-        patch('wants', id, { saved });
-        $('#wi-saved', entry.body).value = rub(saved).replace(' ₽', '');
-        $('#wi-plus', entry.body).value = '';
-        toast(`Отложено ещё ${rub(add)}`);
       },
       'wi-done': () => { flush(); toggleWant(id); closeSheet(); },
       'wi-del': () => { flush(); closeSheet(); deleteItems('wants', [id], 'Пункт удалён'); },

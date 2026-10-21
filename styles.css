@@ -1059,3 +1059,5 @@ svg.i, .i svg { fill: none; stroke: currentColor; stroke-width: 1.9; stroke-line
 .want-links { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0 2px; }
 .want-links .pill-btn { display: inline-flex; align-items: center; gap: 5px; text-decoration: none; height: 34px; }
 .want-links svg { width: 15px; height: 15px; }
+.price-field { display: block; margin-top: 12px; }
+.price-field span { display: block; font-size: 13px; color: var(--muted); margin: 0 4px 6px; }
