@@ -7,7 +7,7 @@
    через Apps Script (см. google-apps-script/Code.gs). Файлы — в Google Диске.
    ========================================================= */
 
-const APP_VERSION = '0.9.1';
+const APP_VERSION = '0.9.2';
 
 /* ---------------- Утилиты ---------------- */
 
@@ -806,6 +806,7 @@ function autoGrow(el) { el.style.height = 'auto'; el.style.height = el.scrollHei
 /* ---------------- Навигация ---------------- */
 
 function nav(tab, folder = '') {
+  ui.shopSel = null;
   if (ui.tab !== tab || ui.folder !== folder) {
     ui.hist.push({ tab: ui.tab, folder: ui.folder });
     if (ui.hist.length > 40) ui.hist.shift();
@@ -832,6 +833,7 @@ function goBack() {
     window.scrollTo(0, 0);
     return;
   }
+  if (ui.shopSel) { ui.shopSel = null; render(); return; }
   const h = ui.hist.pop();
   if (h) {
     ui.tab = h.tab;
@@ -1283,18 +1285,39 @@ function addShop(text, cat = shopTab()) {
   return names.length;
 }
 
+const otherCat = (c) => (c === 'repair' ? 'home' : 'repair');
+const catLabel = (c) => SHOP_CATS.find(([k]) => k === c)[1];
+
 function shopRow(i, group) {
-  return `<div class="task-wrap shop-wrap"${group ? ` data-group="${group}"` : ''} data-id="${i.id}">
-    <div class="task-bg l"></div>
+  const sel = ui.shopSel;
+  const picked = sel?.has(i.id);
+  const to = otherCat(shopCat(i));
+  return `<div class="task-wrap shop-wrap"${group && !sel ? ` data-group="${group}"` : ''} data-id="${i.id}">
+    <div class="task-bg l">${icon('move')}${to === 'repair' ? 'В ремонт' : 'В текущий быт'}</div>
     <div class="task-bg r">Удалить${icon('trash')}</div>
-    <div class="task shop-row${i.done ? ' done' : ''}" data-sid="${i.id}">
-      <button class="check" data-act="shop-toggle" data-id="${i.id}" aria-label="${i.done ? 'Вернуть в «Купить»' : 'Куплено'}">${icon('check')}</button>
-      <button class="t-main" data-act="shop-edit" data-id="${i.id}">
+    <div class="task shop-row${i.done ? ' done' : ''}${sel ? ' selecting' : ''}${picked ? ' picked' : ''}" data-sid="${i.id}">
+      ${sel
+        ? `<button class="check sel-check" data-act="shop-pick" data-id="${i.id}" aria-label="Выбрать">${icon('check')}</button>`
+        : `<button class="check" data-act="shop-toggle" data-id="${i.id}" aria-label="${i.done ? 'Вернуть в «Купить»' : 'Куплено'}">${icon('check')}</button>`}
+      <button class="t-main" data-act="${sel ? 'shop-pick' : 'shop-edit'}" data-id="${i.id}">
         <div class="t-title">${esc(i.name)}</div>
         ${i.note ? `<div class="t-meta"><span class="t-where">${esc(i.note)}</span></div>` : ''}
       </button>
+      ${sel ? '' : `<span class="t-hover"><button data-act="shop-move" data-id="${i.id}" title="Перенести в «${catLabel(to)}»">${icon('move')}</button></span>`}
     </div>
   </div>`;
+}
+
+// Перенос покупок в другой раздел (с отменой)
+function moveShop(ids, to) {
+  const before = ids.map((id) => [id, shopCat(byId('shop', id))]);
+  ids.forEach((id) => patch('shop', id, { cat: to }));
+  render();
+  const n = ids.length;
+  toast(`${n > 1 ? `${n} ${plural(n, ['пункт', 'пункта', 'пунктов'])} перенесено` : 'Перенесено'} в «${catLabel(to)}»`, () => {
+    before.forEach(([id, c]) => patch('shop', id, { cat: c }));
+    render();
+  });
 }
 
 function viewShop() {
@@ -1313,7 +1336,12 @@ function viewShop() {
     <button class="btn small" data-act="shop-add">Добавить</button>
   </div>
   <div class="hint" style="margin:6px 4px 0">Можно сразу несколько — каждое с новой строки.</div>
-  <div class="section-title"><span>Купить · ${buy.length}</span></div>
+  ${ui.shopSel ? `<div class="sel-bar">
+      <span>Выбрано: ${ui.shopSel.size}</span>
+      <button class="btn small" data-act="shop-sel-move"${ui.shopSel.size ? '' : ' disabled'}>${tab === 'repair' ? 'В текущий быт' : 'В ремонт'}</button>
+      <button class="pill-btn" data-act="shop-sel-off">Отмена</button>
+    </div>` : ''}
+  <div class="section-title"><span>Купить · ${buy.length}</span>${buy.length && !ui.shopSel ? '<button data-act="shop-sel-on">Выбрать</button>' : ''}${ui.shopSel && buy.length ? `<button data-act="shop-sel-all">${buy.every((i) => ui.shopSel.has(i.id)) ? 'Снять все' : 'Выбрать все'}</button>` : ''}</div>
   ${buy.length ? `<div class="tasks" data-order>${buy.map((i) => shopRow(i, 'buy')).join('')}</div>`
     : `<div class="empty">${tab === 'repair' ? 'Для ремонта пока ничего не нужно.' : 'Всё куплено. Добавь, что ещё нужно для дома.'}</div>`}
   ${got.length ? `<div class="section-title"><span>Куплено · ${got.length}</span><button data-act="shop-clear">Очистить</button></div>
@@ -2776,8 +2804,28 @@ const ACTIONS = {
   'shop-add': () => shopAddFromField(),
   'shop-toggle': (el) => toggleShop(el.dataset.id, el.closest('.shop-row')),
   'shop-edit': (el) => openShopItem(el.dataset.id),
+  'shop-move': (el) => moveShop([el.dataset.id], otherCat(shopCat(byId('shop', el.dataset.id)))),
+  'shop-sel-on': () => { ui.shopSel = new Set(); render(); },
+  'shop-sel-off': () => { ui.shopSel = null; render(); },
+  'shop-pick': (el) => {
+    const id = el.dataset.id;
+    if (ui.shopSel.has(id)) ui.shopSel.delete(id); else ui.shopSel.add(id);
+    render();
+  },
+  'shop-sel-all': () => {
+    const buy = live('shop').filter((i) => !i.done && shopCat(i) === shopTab());
+    const all = buy.every((i) => ui.shopSel.has(i.id));
+    ui.shopSel = new Set(all ? [] : buy.map((i) => i.id));
+    render();
+  },
+  'shop-sel-move': () => {
+    const ids = [...ui.shopSel];
+    if (!ids.length) return;
+    ui.shopSel = null;
+    moveShop(ids, otherCat(shopTab()));
+  },
   'shop-clear': () => deleteShop(live('shop').filter((i) => i.done && shopCat(i) === shopTab()).map((i) => i.id), 'Купленное убрано'),
-  'shop-tab': (el) => { state.settings.shopCat = el.dataset.c; save(); render(); },
+  'shop-tab': (el) => { state.settings.shopCat = el.dataset.c; ui.shopSel = null; save(); render(); },
   'sync-now': () => syncNow(true),
   'backup-export': () => exportBackup(),
   'backup-import': () => importBackup(),
@@ -2951,6 +2999,7 @@ function gStart(x, y, target) {
     return;
   }
   const srow = target.closest('.shop-row');
+  if (srow && srow.classList.contains('selecting')) return;
   if (srow) {
     const wrap = srow.parentElement;
     const kind = srow.dataset.kind || 'shop';
@@ -3047,7 +3096,7 @@ function gMove(x, y) {
     if (g.row) g.row.classList.remove('anim');
     else g.el.style.transition = 'none';
   }
-  g.dx = g.type === 'shoprow' ? Math.min(dx, 0) : dx;
+  g.dx = g.type === 'shoprow' && g.kind !== 'shop' ? Math.min(dx, 0) : dx;
   if (g.row) {
     dx = g.dx;
     const a = Math.abs(dx) - 10;
@@ -3117,6 +3166,7 @@ function gEnd(cancelled) {
     wrap.querySelectorAll('.l, .r').forEach((b) => { b.style.transition = 'opacity .2s'; b.style.opacity = 0; });
     if (cancelled || Math.abs(s.dx) - 10 <= SWIPE_AT) return;
     if (s.type === 'shoprow') {
+      if (s.dx > 0 && s.kind === 'shop') { moveShop([s.id], otherCat(shopCat(byId('shop', s.id)))); return; }
       if (s.dx < 0) { const i = byId(s.kind, s.id); deleteItems(s.kind, [s.id], `«${i?.name || 'Пункт'}» — удалено`); }
       return;
     }

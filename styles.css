@@ -1025,3 +1025,18 @@ svg.i, .i svg { fill: none; stroke: currentColor; stroke-width: 1.9; stroke-line
 @keyframes flash { 0%, 35% { box-shadow: 0 0 0 2.5px var(--accent); } 100% { box-shadow: var(--shadow); } }
 .ts-row .n-title { white-space: normal; overflow-wrap: anywhere; }
 .shop-tabs { margin: 0 0 10px; } .shop-tabs button { font-size: 14.5px; padding: 8px 4px; }
+
+/* ---------- Покупки: перенос между разделами ---------- */
+
+.shop-wrap .task-bg.l { display: flex; background: var(--move); }
+.sel-bar {
+  position: sticky; top: calc(env(safe-area-inset-top) + 6px); z-index: 5; display: flex; align-items: center; gap: 8px;
+  background: var(--card); box-shadow: var(--shadow), 0 6px 18px rgba(31, 27, 22, 0.12); border-radius: 14px; padding: 8px 8px 8px 14px; margin: 12px 0 0;
+}
+.sel-bar span { flex: 1; font-size: 14.5px; font-weight: 500; }
+.sel-bar .btn { width: auto; margin: 0; padding: 9px 13px; }
+.sel-bar .btn[disabled] { opacity: .4; }
+.sel-check { border-radius: 50%; border-color: var(--faint); }
+.shop-row.picked .sel-check { background: var(--move); border-color: var(--move); color: #fff; }
+.shop-row.picked .sel-check svg { opacity: 1; }
+.tasks > .shop-wrap:has(.shop-row.picked) { box-shadow: 0 0 0 1.5px var(--move); }
