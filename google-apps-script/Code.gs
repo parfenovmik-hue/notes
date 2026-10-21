@@ -34,8 +34,9 @@ const SHEETS = {
   },
   wants: {
     name: 'Мне надо',
-    cols: [['name', 'Что'], ['type', 'Тип'], ['price', 'Стоимость'], ['saved', 'Отложено'], ['done', 'Сделано'], ['note', 'Заметка'],
-      ['id', 'id'], ['order', 'order'], ['doneAt', 'doneAt'], ['createdAt', 'createdAt'], ['updatedAt', 'updatedAt'], ['deleted', 'deleted']],
+    cols: [['name', 'Что'], ['type', 'Тип'], ['price', 'Стоимость'], ['cur', 'Валюта'], ['saved', 'Отложено'], ['done', 'Сделано'], ['note', 'Заметка'],
+      ['link', 'Ссылка'], ['desc', 'Описание'], ['specs', 'Характеристики'], ['image', 'Картинка'],
+      ['id', 'id'], ['status', 'status'], ['order', 'order'], ['doneAt', 'doneAt'], ['createdAt', 'createdAt'], ['updatedAt', 'updatedAt'], ['deleted', 'deleted']],
   },
   files: {
     name: 'Файлы',
@@ -44,7 +45,7 @@ const SHEETS = {
   },
 };
 const TECH = ['id', 'folder', 'noteId', 'html', 'blocks', 'pinned', 'order', 'doneAt', 'createdAt', 'updatedAt', 'deleted', 'driveId'];
-const TEXT_KEYS = ['id', 'name', 'icon', 'color', 'image', 'title', 'text', 'folder', 'folderName', 'noteId', 'noteTitle', 'note', 'html', 'blocks', 'remind', 'mime', 'driveId', 'type', 'cat'];
+const TEXT_KEYS = ['link', 'desc', 'specs', 'cur', 'status', 'id', 'name', 'icon', 'color', 'image', 'title', 'text', 'folder', 'folderName', 'noteId', 'noteTitle', 'note', 'html', 'blocks', 'remind', 'mime', 'driveId', 'type', 'cat'];
 const PROPS = PropertiesService.getScriptProperties();
 const FILES_FOLDER = 'Заметки — вложения';
 
@@ -71,6 +72,7 @@ function doPost(e) {
       case 'outbox': return json({ ok: true, data: recentOutbox_() });
       case 'test': return json({ ok: true, data: sendTest_() });
       case 'diag': return json({ ok: true, data: diag_() });
+      case 'link': return json({ ok: true, data: linkCard_(body) });
       default: return json({ ok: false, error: 'Неизвестное действие' });
     }
   } catch (err) {
@@ -195,6 +197,143 @@ function fixDates_(ss) {
   ss.setSpreadsheetTimeZone(tz);
   SpreadsheetApp.flush();
   PROPS.setProperty('datesFixed', String(Date.now()));
+}
+
+/* ---------------- «Мне надо»: карточка по ссылке ----------------
+   Скрипт сам читает страницу. Если на ней есть текст — Claude оформляет карточку из него
+   (дёшево, без поиска). Если страница пустая или закрыта для роботов — Claude получает
+   инструменты загрузки страниц и поиска и находит товар сам.
+   Ключ Anthropic лежит в Claude.gs (ANTHROPIC_KEY), в GitHub не попадает. */
+
+const LINK_MODEL = 'claude-sonnet-5-5';
+const LINK_SYSTEM = [
+  'Ты помогаешь вести личный список желаний и целей. По ссылке на товар, услугу или курс собери короткую карточку на русском языке.',
+  'Если в сообщении есть текст страницы — опирайся на него. Если текста нет, открой ссылку через web_fetch; если и это не дало данных о товаре, найди его через web_search по названию, артикулу или словам из ссылки.',
+  'Ничего не выдумывай: если цену или характеристику не удалось найти, оставь поле пустым. Цена — основная цена товара или услуги (для курса или автошколы — базовый тариф).',
+  'В конце обязательно один раз вызови save_card.',
+].join('\n');
+const SAVE_CARD_TOOL = {
+  name: 'save_card',
+  description: 'Сохранить итоговую карточку.',
+  strict: true,
+  input_schema: {
+    type: 'object', additionalProperties: false,
+    required: ['name', 'price', 'currency', 'description', 'specs', 'image', 'kind', 'found'],
+    properties: {
+      name: { type: 'string', description: 'Короткое понятное название, до 60 символов' },
+      price: { type: ['number', 'null'], description: 'Цена числом без валюты; null, если не нашлась' },
+      currency: { type: 'string', description: 'Код валюты: RUB, USD, EUR… Пусто, если цены нет' },
+      description: { type: 'string', description: '1–2 предложения: что это и чем хорошо' },
+      specs: {
+        type: 'array', description: '3–5 главных характеристик',
+        items: { type: 'object', additionalProperties: false, required: ['k', 'v'], properties: { k: { type: 'string' }, v: { type: 'string' } } },
+      },
+      image: { type: 'string', description: 'Прямая ссылка на картинку товара, если встретилась; иначе пусто' },
+      kind: { type: 'string', enum: ['thing', 'goal'], description: 'thing — вещь; goal — курс, обучение, услуга, цель' },
+      found: { type: 'boolean', description: 'Удалось ли найти данные о товаре' },
+    },
+  },
+};
+
+function linkCard_(body) {
+  if (typeof ANTHROPIC_KEY === 'undefined' || !ANTHROPIC_KEY) throw new Error('Не задан ключ Claude');
+  const url = String(body.url || '').trim();
+  if (!/^https?:\/\/\S+$/i.test(url)) throw new Error('Это не ссылка');
+  const page = fetchPage_(url);
+  const rich = page.text.length >= 600;
+  const facts = ['Ссылка: ' + url];
+  if (page.title) facts.push('Заголовок страницы: ' + page.title);
+  Object.keys(page.meta).forEach(function (k) { facts.push(k + ': ' + page.meta[k]); });
+  if (page.ld) facts.push('Структурированные данные страницы:\n' + page.ld);
+  if (rich) facts.push('Текст страницы (сокращён):\n' + page.text.slice(0, 14000));
+  else facts.push('Текст страницы прочитать не удалось (ответ ' + page.status + ').');
+
+  const tools = rich ? [SAVE_CARD_TOOL] : [
+    { type: 'web_fetch_20260209', name: 'web_fetch', max_uses: 2 },
+    { type: 'web_search_20260209', name: 'web_search', max_uses: 3 },
+    SAVE_CARD_TOOL,
+  ];
+  const req = {
+    model: LINK_MODEL, max_tokens: 8000, output_config: { effort: 'low' }, fallbacks: 'default',
+    system: LINK_SYSTEM, tools: tools, messages: [{ role: 'user', content: facts.join('\n\n') }],
+  };
+  let card = null, usage = { input: 0, output: 0, searches: 0 };
+  for (let step = 0; step < 4 && !card; step++) {
+    const r = callClaude_(req);
+    usage.input += (r.usage && r.usage.input_tokens) || 0;
+    usage.output += (r.usage && r.usage.output_tokens) || 0;
+    usage.searches += (r.usage && r.usage.server_tool_use && r.usage.server_tool_use.web_search_requests) || 0;
+    if (r.stop_reason === 'refusal') throw new Error('Claude отказался разбирать эту ссылку');
+    const call = (r.content || []).filter(function (b) { return b.type === 'tool_use' && b.name === 'save_card'; })[0];
+    if (call) { card = call.input; break; }
+    // pause_turn — серверные инструменты не успели, продолжаем; иначе просим сохранить карточку
+    req.messages.push({ role: 'assistant', content: r.content });
+    if (r.stop_reason !== 'pause_turn') req.messages.push({ role: 'user', content: 'Сохрани карточку через save_card.' });
+  }
+  if (!card) throw new Error('Не удалось оформить карточку');
+  const img = /^https?:\/\//.test(card.image || '') ? card.image : page.image;
+  return {
+    name: String(card.name || '').slice(0, 120), price: typeof card.price === 'number' ? card.price : null,
+    currency: String(card.currency || '').toUpperCase(), description: card.description || '',
+    specs: (card.specs || []).slice(0, 6), image: img || '', kind: card.kind === 'goal' ? 'goal' : 'thing',
+    found: !!card.found, usage: usage,
+  };
+}
+
+function callClaude_(req) {
+  const res = UrlFetchApp.fetch('https://api.anthropic.com/v1/messages', {
+    method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+    headers: { 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'server-side-fallback-2026-07-01' },
+    payload: JSON.stringify(req),
+  });
+  const code = res.getResponseCode();
+  const j = JSON.parse(res.getContentText() || '{}');
+  if (code >= 300 || j.type === 'error') {
+    const msg = (j.error && j.error.message) || ('HTTP ' + code);
+    if (code === 401) throw new Error('Ключ Claude не подошёл');
+    if (/credit|balance/i.test(msg)) throw new Error('На счёте Anthropic закончились деньги');
+    if (code === 429 || code >= 500) throw new Error('Claude сейчас перегружен — попробуй позже');
+    throw new Error('Ошибка Claude: ' + msg);
+  }
+  return j;
+}
+
+// Читает страницу: заголовок, мета-теги для превью, структурированные данные, видимый текст
+function fetchPage_(url) {
+  const out = { status: 0, title: '', meta: {}, ld: '', text: '', image: '' };
+  let html = '';
+  try {
+    const res = UrlFetchApp.fetch(url, {
+      muteHttpExceptions: true, followRedirects: true,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15',
+        'Accept-Language': 'ru,en;q=0.8',
+      },
+    });
+    out.status = res.getResponseCode();
+    if (out.status < 300) html = res.getContentText('UTF-8').slice(0, 1500000);
+  } catch (err) { out.status = String(err.message || err).slice(0, 80); }
+  if (!html) return out;
+  const decode = function (t) {
+    return String(t || '').replace(/&laquo;/g, '«').replace(/&raquo;/g, '»').replace(/&nbsp;/g, ' ').replace(/&quot;/g, '"')
+      .replace(/&#39;|&apos;/g, "'").replace(/&mdash;/g, '—').replace(/&ndash;/g, '–').replace(/&#(\d+);/g, function (m, n) { return String.fromCharCode(+n); })
+      .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+  };
+  const t = html.match(/<title[^>]*>([^<]*)/i);
+  out.title = t ? decode(t[1]).trim().slice(0, 200) : '';
+  ['og:title', 'og:description', 'og:image', 'og:price:amount', 'og:price:currency', 'product:price:amount', 'product:price:currency', 'twitter:image', 'description'].forEach(function (p) {
+    const re1 = new RegExp('<meta[^>]+(?:property|name)=["\']' + p.replace(/:/g, '\\:') + '["\'][^>]*content=["\']([^"\']*)', 'i');
+    const re2 = new RegExp('<meta[^>]+content=["\']([^"\']*)["\'][^>]*(?:property|name)=["\']' + p.replace(/:/g, '\\:') + '["\']', 'i');
+    const m = html.match(re1) || html.match(re2);
+    if (m && m[1].trim()) out.meta[p] = decode(m[1]).trim().slice(0, 400);
+  });
+  out.image = out.meta['og:image'] || out.meta['twitter:image'] || '';
+  if (out.image && !/^https?:/.test(out.image)) { try { out.image = url.match(/^https?:\/\/[^/]+/)[0] + (out.image[0] === '/' ? '' : '/') + out.image; } catch (e) { out.image = ''; } }
+  const lds = [];
+  html.replace(/<script[^>]+application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi, function (m, j) { lds.push(j.trim()); return m; });
+  out.ld = lds.join('\n').slice(0, 5000);
+  out.text = decode(html.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<noscript[\s\S]*?<\/noscript>/gi, ' ').replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
+  return out;
 }
 
 /* ---------------- Вложения в Google Диске ---------------- */

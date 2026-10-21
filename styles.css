@@ -1040,3 +1040,22 @@ svg.i, .i svg { fill: none; stroke: currentColor; stroke-width: 1.9; stroke-line
 .shop-row.picked .sel-check { background: var(--move); border-color: var(--move); color: #fff; }
 .shop-row.picked .sel-check svg { opacity: 1; }
 .tasks > .shop-wrap:has(.shop-row.picked) { box-shadow: 0 0 0 1.5px var(--move); }
+
+/* ---------- «Мне надо»: карточки по ссылке ---------- */
+
+.want-pic { width: 46px; height: 46px; border-radius: 10px; overflow: hidden; flex: none; background: #fff; box-shadow: var(--shadow); display: grid; place-items: center; }
+.want-pic img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.want-row.done .want-pic { opacity: .5; }
+.want-loading { color: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .45; } }
+.want-hero-pic { margin: 6px 0 4px; border-radius: 14px; overflow: hidden; background: #fff; box-shadow: var(--shadow); display: grid; place-items: center; max-height: 280px; }
+.want-hero-pic img { max-width: 100%; max-height: 280px; object-fit: contain; display: block; }
+.want-desc { margin: 10px 4px 2px; font-size: 15px; line-height: 1.45; color: var(--text); }
+.want-specs { margin-top: 10px; padding: 4px 14px; }
+.want-specs div { display: flex; gap: 12px; justify-content: space-between; padding: 8px 0; font-size: 14px; }
+.want-specs div + div { border-top: 0.5px solid var(--line); }
+.want-specs span { color: var(--muted); flex: none; max-width: 45%; }
+.want-specs b { font-weight: 500; text-align: right; }
+.want-links { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0 2px; }
+.want-links .pill-btn { display: inline-flex; align-items: center; gap: 5px; text-decoration: none; height: 34px; }
+.want-links svg { width: 15px; height: 15px; }

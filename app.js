@@ -7,7 +7,7 @@
    через Apps Script (см. google-apps-script/Code.gs). Файлы — в Google Диске.
    ========================================================= */
 
-const APP_VERSION = '0.9.2';
+const APP_VERSION = '0.10.0';
 
 /* ---------------- Утилиты ---------------- */
 
@@ -108,6 +108,7 @@ const P = {
   outdent: '<path d="M3.5 5.5h17M11 10h9.5M11 14h9.5M3.5 18.5h17M7 9.5 4 12l3 2.5"/>',
   indent: '<path d="M3.5 5.5h17M11 10h9.5M11 14h9.5M3.5 18.5h17M4 9.5 7 12l-3 2.5"/>',
   quote: '<path d="M5 5v14"/><path d="M9.5 8H20M9.5 12H20M9.5 16h7"/>',
+  sync: '<path d="M20 11a8 8 0 0 0-14.3-4.9L4 8M4 4v4h4M4 13a8 8 0 0 0 14.3 4.9L20 16M20 20v-4h-4"/>',
   grip: '<circle cx="9" cy="6" r=".9"/><circle cx="15" cy="6" r=".9"/><circle cx="9" cy="12" r=".9"/><circle cx="15" cy="12" r=".9"/><circle cx="9" cy="18" r=".9"/><circle cx="15" cy="18" r=".9"/>',
   star: '<path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"/>',
   flag: '<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>',
@@ -488,7 +489,7 @@ const FIELDS = {
   tasks: { s: ['id', 'title', 'noteId', 'folder', 'date', 'remind', 'note'], n: ['order', 'doneAt', 'createdAt', 'updatedAt'], b: ['done', 'pinned', 'deleted'] },
   files: { s: ['id', 'noteId', 'name', 'mime', 'driveId'], n: ['size', 'createdAt', 'updatedAt'], b: ['deleted'] },
   shop: { s: ['id', 'name', 'note', 'cat'], n: ['order', 'doneAt', 'createdAt', 'updatedAt'], b: ['done', 'deleted'] },
-  wants: { s: ['id', 'name', 'note', 'type'], n: ['price', 'saved', 'order', 'doneAt', 'createdAt', 'updatedAt'], b: ['done', 'deleted'] },
+  wants: { s: ['id', 'name', 'note', 'type', 'link', 'image', 'desc', 'specs', 'cur', 'status'], n: ['price', 'saved', 'order', 'doneAt', 'createdAt', 'updatedAt'], b: ['done', 'deleted'] },
 };
 
 function norm(k, r) {
@@ -648,6 +649,7 @@ async function syncNow(manual) {
     save();
     setSync('ok');
     if (!ui.sheets.length && !typingInView()) render();
+    enrichPending();
     await uploadFiles();
     if (manual) toast('Синхронизировано ✓');
   } catch (e) {
@@ -1426,6 +1428,12 @@ function openShopItem(id) {
 
 const wantsLeft = () => live('wants').filter((i) => !i.done).length;
 const rub = (n) => new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(Math.round(n || 0)) + ' ₽';
+const CUR_SIGN = { RUB: '₽', USD: '$', EUR: '€', GBP: '£', KZT: '₸', BYN: 'Br', CNY: '¥', AED: 'AED', TRY: '₺', RSD: 'RSD' };
+const isRub = (i) => !i.cur || i.cur === 'RUB';
+// Сумма в валюте пункта: «85 000 ₽», «1 200 €»
+const money = (n, cur) => (!cur || cur === 'RUB' ? rub(n) : new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(n || 0) + ' ' + (CUR_SIGN[cur] || cur));
+const URL_RE = /(https?:\/\/[^\s]+)/i;
+const specsOf = (i) => { try { const a = JSON.parse(i.specs || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; } };
 // «120 000», «120к», «1,5 млн» → число
 function parseMoney(v) {
   let s = String(v || '').toLowerCase().replace(/[\s  ₽р]|руб\.?/g, '').replace(',', '.');
@@ -1440,6 +1448,16 @@ function addWants(text) {
   const lines = String(text || '').split('\n').map((l) => l.replace(/^[-•*]\s*/, '').trim()).filter(Boolean);
   let order = live('wants').reduce((m, i) => Math.max(m, i.order || 0), 0);
   for (const line of lines) {
+    const link = (line.match(URL_RE) || [])[1];
+    if (link) {
+      const host = (link.match(/^https?:\/\/(?:www\.)?([^/]+)/i) || [])[1] || 'ссылка';
+      const rest = line.replace(link, '').replace(/^[\s—–-]+|[\s—–-]+$/g, '');
+      const now = Date.now();
+      const id = uid('w');
+      upsert('wants', { id, name: rest || host, note: '', type: 'thing', price: 0, cur: 'RUB', saved: 0, link, image: '', desc: '', specs: '', status: 'loading', done: false, doneAt: 0, order: ++order, createdAt: now, deleted: false });
+      linkQueue.add(id);
+      continue;
+    }
     // «Кроссовки Balenciaga — 85 000» → цена сразу в карточку
     const MONEY = '(\\d[\\d\\s  ]*(?:[.,]\\d+)?\\s*(?:к|k|млн|₽|р|руб\\.?)?)';
     const m = line.match(new RegExp('^(.*?)\\s*[—–-]\\s*' + MONEY + '\\s*$', 'i'))
@@ -1455,11 +1473,13 @@ function addWants(text) {
 function wantRow(i, group) {
   const pct = i.price ? Math.min(100, Math.round((i.saved || 0) / i.price * 100)) : 0;
   const enough = i.price && (i.saved || 0) >= i.price;
-  const money = i.done
-    ? (i.price ? `<span class="t-where">${rub(i.price)}</span>` : '')
+  const cash = i.done
+    ? (i.price ? `<span class="t-where">${money(i.price, i.cur)}</span>` : '')
     : i.price
-      ? `<span class="t-where${enough ? ' ok' : ''}">${enough ? 'хватает ✓ · ' : (i.saved ? `${rub(i.saved)} из ` : '')}${rub(i.price)}</span>`
+      ? `<span class="t-where${enough ? ' ok' : ''}">${enough ? 'хватает ✓ · ' : (i.saved ? `${money(i.saved, i.cur)} из ` : '')}${money(i.price, i.cur)}</span>`
       : '';
+  const state = i.status === 'loading' ? '<span class="t-where want-loading">Оформляю карточку по ссылке…</span>'
+    : i.status === 'error' ? '<span class="t-where late">Не оформилось — нажми, чтобы повторить</span>' : '';
   return `<div class="task-wrap shop-wrap"${group ? ` data-group="${group}"` : ''} data-id="${i.id}">
     <div class="task-bg l"></div>
     <div class="task-bg r">Удалить${icon('trash')}</div>
@@ -1467,10 +1487,10 @@ function wantRow(i, group) {
       <button class="check" data-act="want-toggle" data-id="${i.id}" aria-label="${i.done ? 'Вернуть' : 'Сделано'}">${icon('check')}</button>
       <button class="t-main" data-act="want-edit" data-id="${i.id}">
         <div class="t-title">${esc(i.name)}</div>
-        ${money || i.note ? `<div class="t-meta">${money}${i.note ? `<span class="t-where">${esc(i.note)}</span>` : ''}</div>` : ''}
+        ${cash || state || i.note ? `<div class="t-meta">${state}${cash}${i.note && !state ? `<span class="t-where">${esc(i.note)}</span>` : ''}</div>` : ''}
         ${i.price && !i.done ? `<div class="want-bar"><i style="width:${pct}%"></i></div>` : ''}
       </button>
-      <span class="t-fold want-type" aria-hidden="true">${icon(i.type === 'goal' ? 'flag' : 'bag')}</span>
+      ${i.image ? `<span class="want-pic"><img src="${esc(i.image)}" alt="" loading="lazy" referrerpolicy="no-referrer"></span>` : `<span class="t-fold want-type" aria-hidden="true">${icon(i.type === 'goal' ? 'flag' : 'bag')}</span>`}
     </div>
   </div>`;
 }
@@ -1479,9 +1499,9 @@ function viewWants() {
   const items = live('wants');
   const open = items.filter((i) => !i.done).sort(byOrder);
   const done = items.filter((i) => i.done).sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0));
-  const need = open.reduce((s, i) => s + (i.price || 0), 0);
-  const saved = open.reduce((s, i) => s + Math.min(i.saved || 0, i.price || i.saved || 0), 0);
-  const spent = done.reduce((s, i) => s + (i.price || 0), 0);
+  const need = open.filter(isRub).reduce((s, i) => s + (i.price || 0), 0);
+  const saved = open.filter(isRub).reduce((s, i) => s + Math.min(i.saved || 0, i.price || i.saved || 0), 0);
+  const spent = done.filter(isRub).reduce((s, i) => s + (i.price || 0), 0);
   return `
   <button class="back" data-act="back">${icon('chevL')}Назад</button>
   <div class="topbar"><div><h1>Мне надо</h1></div></div>
@@ -1492,16 +1512,63 @@ function viewWants() {
     <div class="want-bar big"><i style="width:${Math.min(100, Math.round(saved / need * 100))}%"></i></div>
   </div>` : ''}
   <div class="shop-add-box">
-    <textarea id="want-new" data-keep="want-new" rows="1" enterkeyhint="enter" autocomplete="off" placeholder="Что хочешь?">${esc(state.settings.wantDraft || '')}</textarea>
+    <textarea id="want-new" data-keep="want-new" rows="1" enterkeyhint="enter" autocomplete="off" placeholder="Что хочешь или ссылка">${esc(state.settings.wantDraft || '')}</textarea>
     <button class="btn small" data-act="want-add">Добавить</button>
   </div>
-  <div class="hint" style="margin:6px 4px 0">Цену можно сразу: «Права — 60 000». Несколько — каждое с новой строки.</div>
+  <div class="hint" style="margin:6px 4px 0">Вставь ссылку — карточку с фото, ценой и характеристиками оформит Claude. Или напиши сам, можно с ценой: «Права — 60 000».</div>
   <div class="section-title"><span>Хочу · ${open.length}</span></div>
   ${open.length ? `<div class="tasks" data-order>${open.map((i) => wantRow(i, 'want')).join('')}</div>`
     : '<div class="empty">Добавь цели и вещи, на которые хочешь накопить.</div>'}
   ${done.length ? `<div class="section-title"><span>Сделано · ${done.length}${spent ? ' · ' + rub(spent) : ''}</span></div>
     <div class="tasks">${done.map((i) => wantRow(i, '')).join('')}</div>` : ''}
   <div class="hint" style="text-align:center;margin-top:16px">Пункт: нажать — стоимость и отложенное, влево — удалить, удержать — переставить</div>`;
+}
+
+// Ссылки, которые нужно оформить. Оформляем то, что добавлено здесь, или «зависшее» дольше 2 минут.
+const linkQueue = new Set();
+const linkBusy = new Set();
+async function enrichWant(id) {
+  const i = byId('wants', id);
+  if (!i || i.deleted || !i.link || linkBusy.has(id)) return;
+  if (!state.settings.syncUrl) { patch('wants', id, { status: 'error' }); toast('Чтобы оформлять ссылки, подключи Google-таблицу'); render(); return; }
+  if (!navigator.onLine) return; // оформим, когда появится сеть
+  linkBusy.add(id);
+  if (i.status !== 'loading') { patch('wants', id, { status: 'loading' }); if (typingInView()) updateWantRow(id); else render(); }
+  try {
+    const c = await api('link', { url: i.link });
+    const cur = byId('wants', id);
+    if (!cur || cur.deleted) return;
+    const ch = { status: '', desc: c.description || '', specs: JSON.stringify(c.specs || []), image: c.image || '', type: c.kind === 'goal' ? 'goal' : 'thing' };
+    // Название и цену из ссылки берём, только если человек не вписал их сам
+    const host = (i.link.match(/^https?:\/\/(?:www\.)?([^/]+)/i) || [])[1];
+    if (c.name && (!cur.name || cur.name === host)) ch.name = c.name;
+    if (typeof c.price === 'number' && c.price > 0 && !cur.price) { ch.price = c.price; ch.cur = c.currency || 'RUB'; }
+    patch('wants', id, ch);
+    if (!c.found) toast('По ссылке нашлось немного — проверь карточку');
+  } catch (e) {
+    if (byId('wants', id)) patch('wants', id, { status: 'error' });
+    toast(e.message || 'Не удалось оформить ссылку');
+  } finally {
+    linkBusy.delete(id);
+    linkQueue.delete(id);
+    document.dispatchEvent(new CustomEvent('want-enriched', { detail: id }));
+    if (!ui.sheets.length && !typingInView()) render();
+    else updateWantRow(id);
+    refreshTopSheet();
+  }
+}
+// Обновить одну строку, не трогая поле ввода (пока в нём курсор, весь экран не перерисовываем)
+function updateWantRow(id) {
+  const el = $(`#view .shop-wrap[data-id="${id}"]`);
+  const i = byId('wants', id);
+  if (!el || !i) return;
+  if (i.deleted) { el.remove(); return; }
+  el.outerHTML = wantRow(i, el.dataset.group || '');
+}
+function enrichPending() {
+  for (const i of live('wants')) {
+    if (i.status === 'loading' && i.link && (linkQueue.has(i.id) || Date.now() - (i.createdAt || 0) > 120000)) enrichWant(i.id);
+  }
 }
 
 function wantAddFromField() {
@@ -1516,6 +1583,7 @@ function wantAddFromField() {
   fresh.value = '';
   fresh.focus();
   toast(n > 1 ? `Добавлено ${n} ${plural(n, ['пункт', 'пункта', 'пунктов'])}` : 'Добавлено');
+  enrichPending();
 }
 
 function toggleWant(id, rowEl) {
@@ -1538,28 +1606,50 @@ function deleteItems(kind, ids, label) {
 function openWant(id) {
   if (!byId('wants', id)) return;
   const cur = () => byId('wants', id);
+  // Что было в полях при открытии: сохраняем только то, что человек поменял сам —
+  // иначе пустое поле затрёт цену, которую Claude нашёл, пока карточка была открыта
+  let shown = {};
+  const snap = () => {
+    const b = entry.body;
+    shown = { name: $('#wi-name', b)?.value, price: $('#wi-price', b)?.value, saved: $('#wi-saved', b)?.value, note: $('#wi-note', b)?.value };
+  };
   const flush = () => {
     const i = cur();
     if (!i || i.deleted) return;
     const b = entry.body;
-    const name = $('#wi-name', b)?.value.trim();
-    const note = $('#wi-note', b)?.value.trim() ?? '';
-    const price = parseMoney($('#wi-price', b)?.value);
-    const saved = parseMoney($('#wi-saved', b)?.value);
+    const v = { name: $('#wi-name', b)?.value, price: $('#wi-price', b)?.value, saved: $('#wi-saved', b)?.value, note: $('#wi-note', b)?.value };
     const ch = {};
-    if (name && name !== i.name) ch.name = name;
-    if (note !== (i.note || '')) ch.note = note;
-    if (price !== (i.price || 0)) ch.price = price;
-    if (saved !== (i.saved || 0)) ch.saved = saved;
+    if (v.name !== shown.name && v.name.trim()) ch.name = v.name.trim();
+    if (v.note !== shown.note) ch.note = v.note.trim();
+    if (v.price !== shown.price) ch.price = parseMoney(v.price);
+    if (v.saved !== shown.saved) ch.saved = parseMoney(v.saved);
     if (Object.keys(ch).length) patch('wants', id, ch);
+    snap();
   };
   const paint = (e) => {
     const i = cur();
+    const specs = specsOf(i);
+    $('.want-hero', e.body).innerHTML = `
+      ${i.image ? `<div class="want-hero-pic"><img src="${esc(i.image)}" alt="" referrerpolicy="no-referrer"></div>` : ''}
+      ${i.status === 'loading' ? '<div class="hint want-loading">Claude оформляет карточку по ссылке…</div>' : ''}
+      ${i.desc ? `<p class="want-desc">${esc(i.desc)}</p>` : ''}
+      ${specs.length ? `<div class="card want-specs">${specs.map((x) => `<div><span>${esc(x.k)}</span><b>${esc(x.v)}</b></div>`).join('')}</div>` : ''}
+      ${i.link ? `<div class="want-links"><a class="pill-btn" href="${esc(i.link)}" target="_blank" rel="noopener">${icon('chevR')}Открыть ссылку</a><button class="pill-btn" data-act="wi-refresh">${icon('sync')}${i.status === 'error' ? 'Повторить' : 'Обновить по ссылке'}</button></div>` : ''}`;
     $('.opts', e.body).innerHTML = `
       <div class="seg" style="margin-top:14px"><button class="${i.type !== 'goal' ? 'on' : ''}" data-act="wi-type" data-t="thing">${icon('bag')} Вещь</button><button class="${i.type === 'goal' ? 'on' : ''}" data-act="wi-type" data-t="goal">${icon('flag')} Цель</button></div>
       <button class="btn secondary small" data-act="wi-done" style="margin-top:16px">${i.done ? 'Вернуть в «Хочу»' : 'Отметить сделанным'}</button>
       <button class="btn danger small" data-act="wi-del">Удалить</button>`;
   };
+  const onEnriched = (e) => {
+    if (e.detail !== id || !$('#wi-name', entry.body)) return;
+    const c = cur(), b = entry.body;
+    const num = (n) => (n ? new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(n) : '');
+    if ($('#wi-name', b).value === shown.name) $('#wi-name', b).value = c.name;
+    if ($('#wi-price', b).value === shown.price) $('#wi-price', b).value = num(c.price);
+    snap();
+    paint(entry);
+  };
+  document.addEventListener('want-enriched', onEnriched);
   const entry = openSheet({
     title: 'Мне надо',
     left: '',
@@ -1568,22 +1658,46 @@ function openWant(id) {
     refresh: (e) => {
       if (!$('#wi-name', e.body)) {
         const i = cur();
+        const sign = CUR_SIGN[i.cur] || i.cur || '₽';
+        const num = (n) => (n ? new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(n) : '');
         e.body.innerHTML = `
+          <div class="want-hero"></div>
           <input class="input" id="wi-name" value="${esc(i.name)}" placeholder="Что именно" style="margin-top:6px;font-size:17px;font-weight:600">
           <div class="money-grid">
-            <label><span>Стоимость, ₽</span><input class="input" id="wi-price" inputmode="decimal" value="${i.price ? rub(i.price).replace(' ₽', '') : ''}" placeholder="0"></label>
-            <label><span>Отложено, ₽</span><input class="input" id="wi-saved" inputmode="decimal" value="${i.saved ? rub(i.saved).replace(' ₽', '') : ''}" placeholder="0"></label>
+            <label><span>Стоимость, ${esc(sign)}</span><input class="input" id="wi-price" inputmode="decimal" value="${num(i.price)}" placeholder="0"></label>
+            <label><span>Отложено, ${esc(sign)}</span><input class="input" id="wi-saved" inputmode="decimal" value="${num(i.saved)}" placeholder="0"></label>
           </div>
           <div class="add-money"><input class="input" id="wi-plus" inputmode="decimal" placeholder="Добавить к отложенному"><button class="btn small" data-act="wi-plus">+ Отложить</button></div>
           <div class="field-label">Заметка</div>
           <textarea class="textarea" id="wi-note" rows="2" style="min-height:70px" placeholder="Ссылка, размер, зачем это мне…">${esc(i.note || '')}</textarea>
           <div class="opts"></div>`;
+        setTimeout(snap, 0);
       }
       paint(e);
     },
-    onClose: flush,
+    onClose: () => { flush(); document.removeEventListener('want-enriched', onEnriched); },
     actions: {
       'wi-type': (el) => { flush(); patch('wants', id, { type: el.dataset.t }); paint(entry); },
+      'wi-refresh': () => {
+        flush();
+        const i = cur();
+        // Обновление по ссылке берёт новые название и цену со страницы
+        const host = (i.link.match(/^https?:\/\/(?:www\.)?([^/]+)/i) || [])[1];
+        patch('wants', id, { status: 'loading', name: host || i.name, price: 0 });
+        $('#wi-name', entry.body).value = host || i.name;
+        $('#wi-price', entry.body).value = '';
+        snap();
+        paint(entry);
+        enrichWant(id).then(() => {
+          const c = cur();
+          if (c && $('#wi-name', entry.body)) {
+            $('#wi-name', entry.body).value = c.name;
+            $('#wi-price', entry.body).value = c.price ? new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(c.price) : '';
+            snap();
+            paint(entry);
+          }
+        });
+      },
       'wi-plus': () => {
         const add = parseMoney($('#wi-plus', entry.body).value);
         if (!add) { toast('Впиши сумму'); return; }
@@ -3299,7 +3413,7 @@ document.addEventListener('visibilitychange', () => {
 });
 // Перешли через ширину 900 px (окно на компьютере) — перестроить боковую панель
 matchMedia('(min-width: 900px)').addEventListener('change', () => { if (state) render(); });
-window.addEventListener('online', () => { if (!state) return; scheduleSync(500); if (!ui.sheets.length && !typingInView()) render(); });
+window.addEventListener('online', () => { if (!state) return; scheduleSync(500); enrichPending(); if (!ui.sheets.length && !typingInView()) render(); });
 window.addEventListener('offline', () => { if (state && !ui.sheets.length && !typingInView()) render(); });
 
 // Данные прошлых версий: блоки → HTML, дела папок → тема «Дела», порядок тем
