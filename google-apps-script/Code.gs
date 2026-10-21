@@ -29,7 +29,7 @@ const SHEETS = {
   },
   shop: {
     name: 'Покупки',
-    cols: [['name', 'Покупка'], ['done', 'Куплено'], ['note', 'Заметка'],
+    cols: [['name', 'Покупка'], ['cat', 'Раздел'], ['done', 'Куплено'], ['note', 'Заметка'],
       ['id', 'id'], ['order', 'order'], ['doneAt', 'doneAt'], ['createdAt', 'createdAt'], ['updatedAt', 'updatedAt'], ['deleted', 'deleted']],
   },
   wants: {
@@ -44,7 +44,7 @@ const SHEETS = {
   },
 };
 const TECH = ['id', 'folder', 'noteId', 'html', 'blocks', 'pinned', 'order', 'doneAt', 'createdAt', 'updatedAt', 'deleted', 'driveId'];
-const TEXT_KEYS = ['id', 'name', 'icon', 'color', 'image', 'title', 'text', 'folder', 'folderName', 'noteId', 'noteTitle', 'note', 'html', 'blocks', 'remind', 'mime', 'driveId', 'type'];
+const TEXT_KEYS = ['id', 'name', 'icon', 'color', 'image', 'title', 'text', 'folder', 'folderName', 'noteId', 'noteTitle', 'note', 'html', 'blocks', 'remind', 'mime', 'driveId', 'type', 'cat'];
 const PROPS = PropertiesService.getScriptProperties();
 const FILES_FOLDER = 'Заметки — вложения';
 

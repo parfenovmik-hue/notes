@@ -1024,3 +1024,4 @@ svg.i, .i svg { fill: none; stroke: currentColor; stroke-width: 1.9; stroke-line
 .task-wrap.flash { animation: flash 1.6s ease-out; }
 @keyframes flash { 0%, 35% { box-shadow: 0 0 0 2.5px var(--accent); } 100% { box-shadow: var(--shadow); } }
 .ts-row .n-title { white-space: normal; overflow-wrap: anywhere; }
+.shop-tabs { margin: 0 0 10px; } .shop-tabs button { font-size: 14.5px; padding: 8px 4px; }

@@ -7,7 +7,7 @@
    через Apps Script (см. google-apps-script/Code.gs). Файлы — в Google Диске.
    ========================================================= */
 
-const APP_VERSION = '0.9.0';
+const APP_VERSION = '0.9.1';
 
 /* ---------------- Утилиты ---------------- */
 
@@ -487,7 +487,7 @@ const FIELDS = {
   notes: { s: ['id', 'folder', 'title', 'html'], n: ['order', 'createdAt', 'updatedAt'], b: ['pinned', 'deleted'] },
   tasks: { s: ['id', 'title', 'noteId', 'folder', 'date', 'remind', 'note'], n: ['order', 'doneAt', 'createdAt', 'updatedAt'], b: ['done', 'pinned', 'deleted'] },
   files: { s: ['id', 'noteId', 'name', 'mime', 'driveId'], n: ['size', 'createdAt', 'updatedAt'], b: ['deleted'] },
-  shop: { s: ['id', 'name', 'note'], n: ['order', 'doneAt', 'createdAt', 'updatedAt'], b: ['done', 'deleted'] },
+  shop: { s: ['id', 'name', 'note', 'cat'], n: ['order', 'doneAt', 'createdAt', 'updatedAt'], b: ['done', 'deleted'] },
   wants: { s: ['id', 'name', 'note', 'type'], n: ['price', 'saved', 'order', 'doneAt', 'createdAt', 'updatedAt'], b: ['done', 'deleted'] },
 };
 
@@ -1268,12 +1268,17 @@ function togglePinTask(id) {
 const shopLeft = () => live('shop').filter((i) => !i.done).length;
 
 // Добавляет пункты: каждая строка — отдельная покупка. Новые встают в конец списка.
-function addShop(text) {
+// Разделы покупок: текущий быт и быт-ремонт. У старых пунктов раздела нет — это «текущий быт».
+const SHOP_CATS = [['home', 'Текущий быт'], ['repair', 'Быт-ремонт']];
+const shopCat = (i) => (i.cat === 'repair' ? 'repair' : 'home');
+const shopTab = () => (state.settings.shopCat === 'repair' ? 'repair' : 'home');
+
+function addShop(text, cat = shopTab()) {
   const names = String(text || '').split('\n').map((l) => l.replace(/^[-•*]\s*/, '').trim()).filter(Boolean);
   let order = live('shop').reduce((m, i) => Math.max(m, i.order || 0), 0);
   for (const name of names) {
     const now = Date.now();
-    upsert('shop', { id: uid('p'), name, note: '', done: false, doneAt: 0, order: ++order, createdAt: now, deleted: false });
+    upsert('shop', { id: uid('p'), name, note: '', cat, done: false, doneAt: 0, order: ++order, createdAt: now, deleted: false });
   }
   return names.length;
 }
@@ -1293,21 +1298,24 @@ function shopRow(i, group) {
 }
 
 function viewShop() {
-  const items = live('shop');
+  const tab = shopTab();
+  const items = live('shop').filter((i) => shopCat(i) === tab);
+  const left = (c) => live('shop').filter((i) => !i.done && shopCat(i) === c).length;
   const buy = items.filter((i) => !i.done).sort(byOrder);
   const got = items.filter((i) => i.done).sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0));
   return `
   <button class="back" data-act="back">${icon('chevL')}Назад</button>
   <div class="topbar"><div><h1>Покупки</h1></div></div>
   <div class="day-sub">Список для дома — обновляешь, когда нужно</div>
+  <div class="seg shop-tabs">${SHOP_CATS.map(([k, label]) => `<button class="${tab === k ? 'on' : ''}" data-act="shop-tab" data-c="${k}">${label}${left(k) ? ` · ${left(k)}` : ''}</button>`).join('')}</div>
   <div class="shop-add-box">
-    <textarea id="shop-new" data-keep="shop-new" rows="1" enterkeyhint="enter" autocomplete="off" placeholder="Что купить?">${esc(state.settings.shopDraft || '')}</textarea>
+    <textarea id="shop-new" data-keep="shop-new" rows="1" enterkeyhint="enter" autocomplete="off" placeholder="${tab === 'repair' ? 'Что купить для ремонта?' : 'Что купить?'}">${esc(state.settings.shopDraft || '')}</textarea>
     <button class="btn small" data-act="shop-add">Добавить</button>
   </div>
   <div class="hint" style="margin:6px 4px 0">Можно сразу несколько — каждое с новой строки.</div>
   <div class="section-title"><span>Купить · ${buy.length}</span></div>
   ${buy.length ? `<div class="tasks" data-order>${buy.map((i) => shopRow(i, 'buy')).join('')}</div>`
-    : '<div class="empty">Всё куплено. Добавь, что ещё нужно для дома.</div>'}
+    : `<div class="empty">${tab === 'repair' ? 'Для ремонта пока ничего не нужно.' : 'Всё куплено. Добавь, что ещё нужно для дома.'}</div>`}
   ${got.length ? `<div class="section-title"><span>Куплено · ${got.length}</span><button data-act="shop-clear">Очистить</button></div>
     <div class="tasks">${got.map((i) => shopRow(i, '')).join('')}</div>` : ''}
   <div class="hint" style="text-align:center;margin-top:16px">Пункт: нажать — изменить, влево — удалить, удержать — переставить</div>`;
@@ -1324,7 +1332,8 @@ function shopAddFromField() {
   const fresh = $('#shop-new');
   fresh.value = '';
   fresh.focus();
-  toast(n > 1 ? `Добавлено ${n} ${plural(n, ['пункт', 'пункта', 'пунктов'])}` : 'Добавлено');
+  const where = shopTab() === 'repair' ? ' в «Быт-ремонт»' : ' в «Текущий быт»';
+  toast((n > 1 ? `Добавлено ${n} ${plural(n, ['пункт', 'пункта', 'пунктов'])}` : 'Добавлено') + where);
 }
 
 function toggleShop(id, rowEl) {
@@ -1363,11 +1372,20 @@ function openShopItem(id) {
         <input class="input" id="si-name" value="${esc(i.name)}" placeholder="Что купить" style="margin-top:6px;font-size:17px;font-weight:600">
         <div class="field-label">Заметка</div>
         <textarea class="textarea" id="si-note" rows="2" style="min-height:70px" placeholder="Размер, цвет, ссылка, где купить…">${esc(i.note || '')}</textarea>
+        <div class="field-label">Раздел</div>
+        <div class="seg">${SHOP_CATS.map(([k, label]) => `<button class="${shopCat(i) === k ? 'on' : ''}" data-act="si-cat" data-c="${k}">${label}</button>`).join('')}</div>
         <button class="btn secondary small" data-act="si-toggle" style="margin-top:16px">${i.done ? 'Вернуть в «Купить»' : 'Отметить купленным'}</button>
         <button class="btn danger small" data-act="si-del">Удалить</button>`;
     },
     onClose: flush,
     actions: {
+      'si-cat': (el) => {
+        flush();
+        if (shopCat(byId('shop', id)) === el.dataset.c) return;
+        patch('shop', id, { cat: el.dataset.c });
+        refreshTopSheet();
+        toast(`Перенесено в «${SHOP_CATS.find(([k]) => k === el.dataset.c)[1]}»`);
+      },
       'si-toggle': () => { flush(); toggleShop(id); closeSheet(); },
       'si-del': () => { flush(); closeSheet(); deleteShop([id], 'Покупка удалена'); },
     },
@@ -2758,7 +2776,8 @@ const ACTIONS = {
   'shop-add': () => shopAddFromField(),
   'shop-toggle': (el) => toggleShop(el.dataset.id, el.closest('.shop-row')),
   'shop-edit': (el) => openShopItem(el.dataset.id),
-  'shop-clear': () => deleteShop(live('shop').filter((i) => i.done).map((i) => i.id), 'Купленное убрано'),
+  'shop-clear': () => deleteShop(live('shop').filter((i) => i.done && shopCat(i) === shopTab()).map((i) => i.id), 'Купленное убрано'),
+  'shop-tab': (el) => { state.settings.shopCat = el.dataset.c; save(); render(); },
   'sync-now': () => syncNow(true),
   'backup-export': () => exportBackup(),
   'backup-import': () => importBackup(),
